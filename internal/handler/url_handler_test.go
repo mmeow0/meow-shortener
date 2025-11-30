@@ -19,7 +19,8 @@ func setupHandler() (*URLHandler, *chi.Mux) {
 	h := NewURLHandler(svc, "http://localhost:8080")
 
 	r := chi.NewRouter()
-	r.Post("/api/shorten", h.CreateShortURL)
+	r.Post("/", h.CreateShortURLPlain)
+	r.Post("/api/shorten", h.CreateShortURL) // JSON API
 	r.Get("/{id}", h.GetOriginalURL)
 
 	return h, r
@@ -183,8 +184,8 @@ func TestHandleGet_RootPath(t *testing.T) {
 	res := w.Result()
 	defer res.Body.Close()
 
-	if res.StatusCode != http.StatusNotFound {
-		t.Errorf("ожидался статус 404 для GET / без ID, получен %d", res.StatusCode)
+	if res.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("ожидался статус 405 для GET / без ID, получен %d", res.StatusCode)
 	}
 }
 
@@ -287,5 +288,106 @@ func TestHandlePost_MultipleURLs(t *testing.T) {
 		if location != urls[i] {
 			t.Errorf("для короткого ID %s ожидался URL %s, получен %s", shortID, urls[i], location)
 		}
+	}
+}
+
+func TestHandlePost_PlainText_Success(t *testing.T) {
+	_, r := setupHandler()
+
+	body := strings.NewReader("https://practicum.yandex.ru/")
+	req := httptest.NewRequest(http.MethodPost, "/", body)
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+
+	res := w.Result()
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusCreated {
+		t.Errorf("ожидался статус 201, получен %d", res.StatusCode)
+	}
+
+	contentType := res.Header.Get("Content-Type")
+	if contentType != "text/plain" {
+		t.Errorf("ожидался Content-Type text/plain, получен %s", contentType)
+	}
+
+	responseStr := w.Body.String()
+
+	if !strings.HasPrefix(responseStr, "http://localhost:8080/") {
+		t.Errorf("ожидался короткий URL с префиксом http://localhost:8080/, получен %s", responseStr)
+	}
+
+	shortID := strings.TrimPrefix(responseStr, "http://localhost:8080/")
+	if len(shortID) != 8 {
+		t.Errorf("ожидалась длина короткого ID = 8 символов, получен ID: %s", shortID)
+	}
+}
+
+func TestHandlePost_PlainText_EmptyBody(t *testing.T) {
+	_, r := setupHandler()
+
+	body := strings.NewReader("")
+	req := httptest.NewRequest(http.MethodPost, "/", body)
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+
+	res := w.Result()
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusBadRequest {
+		t.Errorf("ожидался статус 400 для пустого тела, получен %d", res.StatusCode)
+	}
+}
+
+func TestHandlePost_PlainText_WhitespaceBody(t *testing.T) {
+	_, r := setupHandler()
+
+	body := strings.NewReader("   \n\t   ")
+	req := httptest.NewRequest(http.MethodPost, "/", body)
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+
+	res := w.Result()
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusBadRequest {
+		t.Errorf("ожидался статус 400 для пустого URL, получен %d", res.StatusCode)
+	}
+}
+
+func TestHandlePost_PlainText_Integration(t *testing.T) {
+	_, r := setupHandler()
+
+	// Создаем короткий URL через text/plain API
+	originalURL := "https://practicum.yandex.ru/"
+	postBody := strings.NewReader(originalURL)
+	postReq := httptest.NewRequest(http.MethodPost, "/", postBody)
+	postW := httptest.NewRecorder()
+	r.ServeHTTP(postW, postReq)
+
+	postRes := postW.Result()
+	defer postRes.Body.Close()
+
+	responseBody := postW.Body.String()
+	shortID := strings.TrimPrefix(responseBody, "http://localhost:8080/")
+
+	// Проверяем, что можем получить оригинальный URL
+	getReq := httptest.NewRequest(http.MethodGet, "/"+shortID, nil)
+	getW := httptest.NewRecorder()
+	r.ServeHTTP(getW, getReq)
+
+	getRes := getW.Result()
+	defer getRes.Body.Close()
+
+	if getRes.StatusCode != http.StatusTemporaryRedirect {
+		t.Errorf("ожидался статус 307, получен %d", getRes.StatusCode)
+	}
+
+	location := getRes.Header.Get("Location")
+	if location != originalURL {
+		t.Errorf("ожидался Location: %s, получен %s", originalURL, location)
 	}
 }

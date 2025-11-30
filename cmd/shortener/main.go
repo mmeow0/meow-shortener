@@ -18,6 +18,8 @@ func main() {
 	urlHandler := handler.NewURLHandler(urlService, cfg.BaseURL)
 
 	r := chi.NewRouter()
+
+	r.Post("/", urlHandler.CreateShortURLPlain)
 	r.Post("/api/shorten", urlHandler.CreateShortURL)
 	r.Get("/{id}", urlHandler.GetOriginalURL)
 

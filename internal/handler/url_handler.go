@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -23,7 +24,35 @@ func NewURLHandler(service *service.URLService, baseURL string) *URLHandler {
 	}
 }
 
-// CreateShortURL обрабатывает POST запрос для создания короткого URL
+// CreateShortURLPlain обрабатывает POST запрос для создания короткого URL (text/plain формат)
+func (h *URLHandler) CreateShortURLPlain(res http.ResponseWriter, req *http.Request) {
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		res.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	defer req.Body.Close()
+
+	originalURL := strings.TrimSpace(string(body))
+	if originalURL == "" {
+		res.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	shortID, err := h.service.ShortenURL(originalURL)
+	if err != nil {
+		res.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	shortURL := fmt.Sprintf("%s/%s", h.baseURL, shortID)
+
+	res.Header().Set("Content-Type", "text/plain")
+	res.WriteHeader(http.StatusCreated)
+	res.Write([]byte(shortURL))
+}
+
+// CreateShortURL обрабатывает POST запрос для создания короткого URL (JSON формат)
 func (h *URLHandler) CreateShortURL(res http.ResponseWriter, req *http.Request) {
 	var request model.ShortenRequest
 
