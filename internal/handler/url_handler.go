@@ -1,51 +1,62 @@
 package handler
 
 import (
+	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/mmeow0/meow-shortener/internal/model"
 	"github.com/mmeow0/meow-shortener/internal/service"
 )
 
 type URLHandler struct {
 	service *service.URLService
+	baseURL string
 }
 
-func NewURLHandler(service *service.URLService) *URLHandler {
+func NewURLHandler(service *service.URLService, baseURL string) *URLHandler {
 	return &URLHandler{
 		service: service,
+		baseURL: baseURL,
 	}
 }
 
 // CreateShortURL обрабатывает POST запрос для создания короткого URL
 func (h *URLHandler) CreateShortURL(res http.ResponseWriter, req *http.Request) {
-	body, err := io.ReadAll(req.Body)
-	if err != nil {
+	var request model.ShortenRequest
+
+	decoder := json.NewDecoder(req.Body)
+	if err := decoder.Decode(&request); err != nil {
 		res.WriteHeader(http.StatusBadRequest)
 		return
 	}
 	defer req.Body.Close()
 
-	originalURL := strings.TrimSpace(string(body))
-	if originalURL == "" {
+	// Проверяем, что URL не пустой и не состоит только из пробелов
+	if strings.TrimSpace(request.URL) == "" {
 		res.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	shortID, err := h.service.ShortenURL(originalURL)
+	shortID, err := h.service.ShortenURL(request.URL)
 	if err != nil {
 		res.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	shortURL := fmt.Sprintf("http://localhost:8080/%s", shortID)
+	shortURL := fmt.Sprintf("%s/%s", h.baseURL, shortID)
 
-	res.Header().Set("Content-Type", "text/plain")
+	response := model.ShortenResponse{
+		Result: shortURL,
+	}
+
+	res.Header().Set("Content-Type", "application/json")
 	res.WriteHeader(http.StatusCreated)
-	res.Write([]byte(shortURL))
+
+	encoder := json.NewEncoder(res)
+	encoder.Encode(response)
 }
 
 // GetOriginalURL обрабатывает GET запрос для получения оригинального URL

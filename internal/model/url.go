@@ -6,3 +6,13 @@ type URL struct {
 	OriginalURL string // Оригинальный URL
 }
 
+// ShortenRequest представляет JSON запрос для сокращения URL
+type ShortenRequest struct {
+	URL string `json:"url"`
+}
+
+// ShortenResponse представляет JSON ответ с сокращённым URL
+type ShortenResponse struct {
+	Result string `json:"result"`
+}
+

@@ -1,13 +1,14 @@
 package handler
 
 import (
-	"io"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/mmeow0/meow-shortener/internal/model"
 	"github.com/mmeow0/meow-shortener/internal/repository"
 	"github.com/mmeow0/meow-shortener/internal/service"
 )
@@ -15,10 +16,10 @@ import (
 func setupHandler() (*URLHandler, *chi.Mux) {
 	repo := repository.NewInMemoryURLRepository()
 	svc := service.NewURLService(repo)
-	h := NewURLHandler(svc)
+	h := NewURLHandler(svc, "http://localhost:8080")
 
 	r := chi.NewRouter()
-	r.Post("/", h.CreateShortURL)
+	r.Post("/api/shorten", h.CreateShortURL)
 	r.Get("/{id}", h.GetOriginalURL)
 
 	return h, r
@@ -27,8 +28,10 @@ func setupHandler() (*URLHandler, *chi.Mux) {
 func TestHandlePost_Success(t *testing.T) {
 	_, r := setupHandler()
 
-	body := strings.NewReader("https://practicum.yandex.ru/")
-	req := httptest.NewRequest(http.MethodPost, "/", body)
+	requestBody := `{"url":"https://practicum.yandex.ru/"}`
+	body := strings.NewReader(requestBody)
+	req := httptest.NewRequest(http.MethodPost, "/api/shorten", body)
+	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
 	r.ServeHTTP(w, req)
@@ -41,22 +44,23 @@ func TestHandlePost_Success(t *testing.T) {
 	}
 
 	contentType := res.Header.Get("Content-Type")
-	if contentType != "text/plain" {
-		t.Errorf("ожидался Content-Type text/plain, получен %s", contentType)
+	if contentType != "application/json" {
+		t.Errorf("ожидался Content-Type application/json, получен %s", contentType)
 	}
 
-	responseBody, err := io.ReadAll(res.Body)
+	var response model.ShortenResponse
+	err := json.NewDecoder(res.Body).Decode(&response)
 	if err != nil {
-		t.Fatalf("ошибка чтения ответа: %v", err)
+		t.Fatalf("ошибка декодирования JSON ответа: %v", err)
 	}
 
-	responseStr := string(responseBody)
-	if !strings.HasPrefix(responseStr, "http://localhost:8080/") {
-		t.Errorf("ожидался короткий URL с префиксом http://localhost:8080/, получен %s", responseStr)
+	if !strings.HasPrefix(response.Result, "http://localhost:8080/") {
+		t.Errorf("ожидался короткий URL с префиксом http://localhost:8080/, получен %s", response.Result)
 	}
 
-	if len(responseStr) != len("http://localhost:8080/")+8 {
-		t.Errorf("ожидалась длина короткого ID = 8 символов, получен URL: %s", responseStr)
+	shortID := strings.TrimPrefix(response.Result, "http://localhost:8080/")
+	if len(shortID) != 8 {
+		t.Errorf("ожидалась длина короткого ID = 8 символов, получен ID: %s", shortID)
 	}
 }
 
@@ -64,7 +68,8 @@ func TestHandlePost_EmptyBody(t *testing.T) {
 	_, r := setupHandler()
 
 	body := strings.NewReader("")
-	req := httptest.NewRequest(http.MethodPost, "/", body)
+	req := httptest.NewRequest(http.MethodPost, "/api/shorten", body)
+	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
 	r.ServeHTTP(w, req)
@@ -80,8 +85,10 @@ func TestHandlePost_EmptyBody(t *testing.T) {
 func TestHandlePost_WhitespaceBody(t *testing.T) {
 	_, r := setupHandler()
 
-	body := strings.NewReader("   \n\t   ")
-	req := httptest.NewRequest(http.MethodPost, "/", body)
+	requestBody := `{"url":"   \n\t   "}`
+	body := strings.NewReader(requestBody)
+	req := httptest.NewRequest(http.MethodPost, "/api/shorten", body)
+	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
 	r.ServeHTTP(w, req)
@@ -97,8 +104,10 @@ func TestHandlePost_WhitespaceBody(t *testing.T) {
 func TestHandlePost_InvalidPath(t *testing.T) {
 	_, r := setupHandler()
 
-	body := strings.NewReader("https://example.com")
+	requestBody := `{"url":"https://example.com"}`
+	body := strings.NewReader(requestBody)
 	req := httptest.NewRequest(http.MethodPost, "/some/path", body)
+	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
 	r.ServeHTTP(w, req)
@@ -116,17 +125,19 @@ func TestHandleGet_Success(t *testing.T) {
 
 	originalURL := "https://practicum.yandex.ru/"
 
-	postBody := strings.NewReader(originalURL)
-	postReq := httptest.NewRequest(http.MethodPost, "/", postBody)
+	requestBody := `{"url":"` + originalURL + `"}`
+	postBody := strings.NewReader(requestBody)
+	postReq := httptest.NewRequest(http.MethodPost, "/api/shorten", postBody)
+	postReq.Header.Set("Content-Type", "application/json")
 	postW := httptest.NewRecorder()
 	r.ServeHTTP(postW, postReq)
 
 	postRes := postW.Result()
 	defer postRes.Body.Close()
 
-	responseBody, _ := io.ReadAll(postRes.Body)
-	shortURL := string(responseBody)
-	shortID := strings.TrimPrefix(shortURL, "http://localhost:8080/")
+	var response model.ShortenResponse
+	json.NewDecoder(postRes.Body).Decode(&response)
+	shortID := strings.TrimPrefix(response.Result, "http://localhost:8080/")
 
 	getReq := httptest.NewRequest(http.MethodGet, "/"+shortID, nil)
 	getW := httptest.NewRecorder()
@@ -172,8 +183,8 @@ func TestHandleGet_RootPath(t *testing.T) {
 	res := w.Result()
 	defer res.Body.Close()
 
-	if res.StatusCode != http.StatusMethodNotAllowed {
-		t.Errorf("ожидался статус 405 для GET / без ID, получен %d", res.StatusCode)
+	if res.StatusCode != http.StatusNotFound {
+		t.Errorf("ожидался статус 404 для GET / без ID, получен %d", res.StatusCode)
 	}
 }
 
@@ -206,7 +217,8 @@ func TestHandleRoot_UnsupportedMethod(t *testing.T) {
 
 	for _, method := range methods {
 		t.Run(method, func(t *testing.T) {
-			req := httptest.NewRequest(method, "/", nil)
+			req := httptest.NewRequest(method, "/api/shorten", nil)
+			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
 			r.ServeHTTP(w, req)
@@ -233,18 +245,20 @@ func TestHandlePost_MultipleURLs(t *testing.T) {
 	shortIDs := make([]string, 0, len(urls))
 
 	for _, url := range urls {
-		body := strings.NewReader(url)
-		req := httptest.NewRequest(http.MethodPost, "/", body)
+		requestBody := `{"url":"` + url + `"}`
+		body := strings.NewReader(requestBody)
+		req := httptest.NewRequest(http.MethodPost, "/api/shorten", body)
+		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 
 		r.ServeHTTP(w, req)
 
 		res := w.Result()
-		responseBody, _ := io.ReadAll(res.Body)
+		var response model.ShortenResponse
+		json.NewDecoder(res.Body).Decode(&response)
 		res.Body.Close()
 
-		shortURL := string(responseBody)
-		shortID := strings.TrimPrefix(shortURL, "http://localhost:8080/")
+		shortID := strings.TrimPrefix(response.Result, "http://localhost:8080/")
 		shortIDs = append(shortIDs, shortID)
 	}
 
