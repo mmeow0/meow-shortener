@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/mmeow0/meow-shortener/internal/service"
 )
 
@@ -19,26 +20,8 @@ func NewURLHandler(service *service.URLService) *URLHandler {
 	}
 }
 
-// HandleRoot обрабатывает запросы к корневому эндпоинту
-func (h *URLHandler) HandleRoot(res http.ResponseWriter, req *http.Request) {
-	switch req.Method {
-	case http.MethodGet:
-		h.handleGet(res, req)
-	case http.MethodPost:
-		h.handlePost(res, req)
-	default:
-		res.WriteHeader(http.StatusBadRequest)
-	}
-}
-
-// handlePost обрабатывает POST запрос для создания короткого URL
-func (h *URLHandler) handlePost(res http.ResponseWriter, req *http.Request) {
-	// Проверяем, что путь корректный (только "/")
-	if req.URL.Path != "/" {
-		res.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
+// CreateShortURL обрабатывает POST запрос для создания короткого URL
+func (h *URLHandler) CreateShortURL(res http.ResponseWriter, req *http.Request) {
 	body, err := io.ReadAll(req.Body)
 	if err != nil {
 		res.WriteHeader(http.StatusBadRequest)
@@ -46,21 +29,18 @@ func (h *URLHandler) handlePost(res http.ResponseWriter, req *http.Request) {
 	}
 	defer req.Body.Close()
 
-	// Получаем URL из тела запроса
 	originalURL := strings.TrimSpace(string(body))
 	if originalURL == "" {
 		res.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	// Создаём короткий URL
 	shortID, err := h.service.ShortenURL(originalURL)
 	if err != nil {
 		res.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	// Формируем короткий URL
 	shortURL := fmt.Sprintf("http://localhost:8080/%s", shortID)
 
 	res.Header().Set("Content-Type", "text/plain")
@@ -68,39 +48,26 @@ func (h *URLHandler) handlePost(res http.ResponseWriter, req *http.Request) {
 	res.Write([]byte(shortURL))
 }
 
-// handleGet обрабатывает GET запрос для получения оригинального URL
-func (h *URLHandler) handleGet(res http.ResponseWriter, req *http.Request) {
-	// Извлекаем ID из пути
-	path := req.URL.Path
-	if path == "/" {
+// GetOriginalURL обрабатывает GET запрос для получения оригинального URL
+func (h *URLHandler) GetOriginalURL(res http.ResponseWriter, req *http.Request) {
+	shortID := chi.URLParam(req, "id")
+
+	if shortID == "" {
 		res.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	// Убираем начальный слеш
-	shortID := strings.TrimPrefix(path, "/")
-
-	// Проверяем, что нет вложенных путей
-	if strings.Contains(shortID, "/") {
-		res.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	// Получаем оригинальный URL через сервис
 	originalURL, err := h.service.GetOriginalURL(shortID)
 	if err != nil {
 		res.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	// Если URL не найден
 	if originalURL == "" {
 		res.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	// Возвращаем редирект
 	res.Header().Set("Location", originalURL)
 	res.WriteHeader(http.StatusTemporaryRedirect)
 }
-

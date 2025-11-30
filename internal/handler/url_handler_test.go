@@ -7,24 +7,31 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/mmeow0/meow-shortener/internal/repository"
 	"github.com/mmeow0/meow-shortener/internal/service"
 )
 
-func setupHandler() *URLHandler {
+func setupHandler() (*URLHandler, *chi.Mux) {
 	repo := repository.NewInMemoryURLRepository()
 	svc := service.NewURLService(repo)
-	return NewURLHandler(svc)
+	h := NewURLHandler(svc)
+
+	r := chi.NewRouter()
+	r.Post("/", h.CreateShortURL)
+	r.Get("/{id}", h.GetOriginalURL)
+
+	return h, r
 }
 
 func TestHandlePost_Success(t *testing.T) {
-	handler := setupHandler()
+	_, r := setupHandler()
 
 	body := strings.NewReader("https://practicum.yandex.ru/")
 	req := httptest.NewRequest(http.MethodPost, "/", body)
 	w := httptest.NewRecorder()
 
-	handler.HandleRoot(w, req)
+	r.ServeHTTP(w, req)
 
 	res := w.Result()
 	defer res.Body.Close()
@@ -54,13 +61,13 @@ func TestHandlePost_Success(t *testing.T) {
 }
 
 func TestHandlePost_EmptyBody(t *testing.T) {
-	handler := setupHandler()
+	_, r := setupHandler()
 
 	body := strings.NewReader("")
 	req := httptest.NewRequest(http.MethodPost, "/", body)
 	w := httptest.NewRecorder()
 
-	handler.HandleRoot(w, req)
+	r.ServeHTTP(w, req)
 
 	res := w.Result()
 	defer res.Body.Close()
@@ -71,13 +78,13 @@ func TestHandlePost_EmptyBody(t *testing.T) {
 }
 
 func TestHandlePost_WhitespaceBody(t *testing.T) {
-	handler := setupHandler()
+	_, r := setupHandler()
 
 	body := strings.NewReader("   \n\t   ")
 	req := httptest.NewRequest(http.MethodPost, "/", body)
 	w := httptest.NewRecorder()
 
-	handler.HandleRoot(w, req)
+	r.ServeHTTP(w, req)
 
 	res := w.Result()
 	defer res.Body.Close()
@@ -88,31 +95,31 @@ func TestHandlePost_WhitespaceBody(t *testing.T) {
 }
 
 func TestHandlePost_InvalidPath(t *testing.T) {
-	handler := setupHandler()
+	_, r := setupHandler()
 
 	body := strings.NewReader("https://example.com")
 	req := httptest.NewRequest(http.MethodPost, "/some/path", body)
 	w := httptest.NewRecorder()
 
-	handler.HandleRoot(w, req)
+	r.ServeHTTP(w, req)
 
 	res := w.Result()
 	defer res.Body.Close()
 
-	if res.StatusCode != http.StatusBadRequest {
-		t.Errorf("ожидался статус 400 для невалидного пути, получен %d", res.StatusCode)
+	if res.StatusCode != http.StatusNotFound {
+		t.Errorf("ожидался статус 404 для невалидного пути, получен %d", res.StatusCode)
 	}
 }
 
 func TestHandleGet_Success(t *testing.T) {
-	handler := setupHandler()
+	_, r := setupHandler()
 
 	originalURL := "https://practicum.yandex.ru/"
 
 	postBody := strings.NewReader(originalURL)
 	postReq := httptest.NewRequest(http.MethodPost, "/", postBody)
 	postW := httptest.NewRecorder()
-	handler.HandleRoot(postW, postReq)
+	r.ServeHTTP(postW, postReq)
 
 	postRes := postW.Result()
 	defer postRes.Body.Close()
@@ -123,7 +130,7 @@ func TestHandleGet_Success(t *testing.T) {
 
 	getReq := httptest.NewRequest(http.MethodGet, "/"+shortID, nil)
 	getW := httptest.NewRecorder()
-	handler.HandleRoot(getW, getReq)
+	r.ServeHTTP(getW, getReq)
 
 	getRes := getW.Result()
 	defer getRes.Body.Close()
@@ -139,12 +146,12 @@ func TestHandleGet_Success(t *testing.T) {
 }
 
 func TestHandleGet_NotFound(t *testing.T) {
-	handler := setupHandler()
+	_, r := setupHandler()
 
 	req := httptest.NewRequest(http.MethodGet, "/nonexistent", nil)
 	w := httptest.NewRecorder()
 
-	handler.HandleRoot(w, req)
+	r.ServeHTTP(w, req)
 
 	res := w.Result()
 	defer res.Body.Close()
@@ -155,39 +162,39 @@ func TestHandleGet_NotFound(t *testing.T) {
 }
 
 func TestHandleGet_RootPath(t *testing.T) {
-	handler := setupHandler()
+	_, r := setupHandler()
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 
-	handler.HandleRoot(w, req)
+	r.ServeHTTP(w, req)
 
 	res := w.Result()
 	defer res.Body.Close()
 
-	if res.StatusCode != http.StatusBadRequest {
-		t.Errorf("ожидался статус 400 для GET / без ID, получен %d", res.StatusCode)
+	if res.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("ожидался статус 405 для GET / без ID, получен %d", res.StatusCode)
 	}
 }
 
 func TestHandleGet_NestedPath(t *testing.T) {
-	handler := setupHandler()
+	_, r := setupHandler()
 
 	req := httptest.NewRequest(http.MethodGet, "/some/nested/path", nil)
 	w := httptest.NewRecorder()
 
-	handler.HandleRoot(w, req)
+	r.ServeHTTP(w, req)
 
 	res := w.Result()
 	defer res.Body.Close()
 
-	if res.StatusCode != http.StatusBadRequest {
-		t.Errorf("ожидался статус 400 для вложенного пути, получен %d", res.StatusCode)
+	if res.StatusCode != http.StatusNotFound {
+		t.Errorf("ожидался статус 404 для вложенного пути, получен %d", res.StatusCode)
 	}
 }
 
 func TestHandleRoot_UnsupportedMethod(t *testing.T) {
-	handler := setupHandler()
+	_, r := setupHandler()
 
 	methods := []string{
 		http.MethodPut,
@@ -202,20 +209,20 @@ func TestHandleRoot_UnsupportedMethod(t *testing.T) {
 			req := httptest.NewRequest(method, "/", nil)
 			w := httptest.NewRecorder()
 
-			handler.HandleRoot(w, req)
+			r.ServeHTTP(w, req)
 
 			res := w.Result()
 			defer res.Body.Close()
 
-			if res.StatusCode != http.StatusBadRequest {
-				t.Errorf("ожидался статус 400 для метода %s, получен %d", method, res.StatusCode)
+			if res.StatusCode != http.StatusMethodNotAllowed {
+				t.Errorf("ожидался статус 405 для метода %s, получен %d", method, res.StatusCode)
 			}
 		})
 	}
 }
 
 func TestHandlePost_MultipleURLs(t *testing.T) {
-	handler := setupHandler()
+	_, r := setupHandler()
 
 	urls := []string{
 		"https://practicum.yandex.ru/",
@@ -230,7 +237,7 @@ func TestHandlePost_MultipleURLs(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/", body)
 		w := httptest.NewRecorder()
 
-		handler.HandleRoot(w, req)
+		r.ServeHTTP(w, req)
 
 		res := w.Result()
 		responseBody, _ := io.ReadAll(res.Body)
@@ -257,7 +264,7 @@ func TestHandlePost_MultipleURLs(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/"+shortID, nil)
 		w := httptest.NewRecorder()
 
-		handler.HandleRoot(w, req)
+		r.ServeHTTP(w, req)
 
 		res := w.Result()
 		location := res.Header.Get("Location")
@@ -268,4 +275,3 @@ func TestHandlePost_MultipleURLs(t *testing.T) {
 		}
 	}
 }
-
