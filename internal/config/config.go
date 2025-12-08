@@ -1,7 +1,9 @@
 package config
 
 import (
+	"errors"
 	"flag"
+	"net/url"
 )
 
 type Config struct {
@@ -11,7 +13,7 @@ type Config struct {
 	BaseURL string
 }
 
-func NewConfig() *Config {
+func NewConfig() (*Config, error) {
 	cfg := &Config{}
 
 	flag.StringVar(&cfg.ServerAddress, "a", "localhost:8080", "Адрес запуска HTTP-сервера")
@@ -19,6 +21,30 @@ func NewConfig() *Config {
 
 	flag.Parse()
 
-	return cfg
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+
+	return cfg, nil
 }
 
+func (c *Config) validate() error {
+	if c.ServerAddress == "" {
+		return errors.New("server address is empty")
+	}
+
+	if c.BaseURL == "" {
+		return errors.New("base URL is empty")
+	}
+
+	parsedURL, err := url.Parse(c.BaseURL)
+	if err != nil {
+		return errors.New("base URL is invalid")
+	}
+
+	if parsedURL.Scheme == "" || parsedURL.Host == "" {
+		return errors.New("base URL must contain scheme and host")
+	}
+
+	return nil
+}

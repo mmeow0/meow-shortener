@@ -1,31 +1,18 @@
 package main
 
 import (
-	"net/http"
+	"log"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/mmeow0/meow-shortener/internal/config"
-	"github.com/mmeow0/meow-shortener/internal/handler"
-	"github.com/mmeow0/meow-shortener/internal/repository"
-	"github.com/mmeow0/meow-shortener/internal/service"
+	"github.com/mmeow0/meow-shortener/internal/app"
 )
 
 func main() {
-	cfg := config.NewConfig()
-
-	urlRepo := repository.NewInMemoryURLRepository()
-	urlService := service.NewURLService(urlRepo)
-	urlHandler := handler.NewURLHandler(urlService, cfg.BaseURL)
-
-	r := chi.NewRouter()
-
-	r.Post("/", urlHandler.CreateShortURLPlain)
-	r.Post("/api/shorten", urlHandler.CreateShortURL)
-	r.Get("/{id}", urlHandler.GetOriginalURL)
-
-	// Используем адрес из конфигурации
-	err := http.ListenAndServe(cfg.ServerAddress, r)
+	app, err := app.InitializeApp()
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
+	}
+
+	if err := app.Run(); err != nil {
+		log.Fatal(err)
 	}
 }

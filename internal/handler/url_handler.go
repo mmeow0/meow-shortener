@@ -2,13 +2,16 @@ package handler
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io"
+	"log"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/mmeow0/meow-shortener/internal/model"
+	"github.com/mmeow0/meow-shortener/internal/repository"
 	"github.com/mmeow0/meow-shortener/internal/service"
 )
 
@@ -41,11 +44,18 @@ func (h *URLHandler) CreateShortURLPlain(res http.ResponseWriter, req *http.Requ
 
 	shortID, err := h.service.ShortenURL(originalURL)
 	if err != nil {
-		res.WriteHeader(http.StatusBadRequest)
+		log.Printf("failed to shorten url %q: %v", originalURL, err)
+		res.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	shortURL := fmt.Sprintf("%s/%s", h.baseURL, shortID)
+	shortURL, err := url.JoinPath(h.baseURL, shortID)
+
+	if err != nil {
+		log.Printf("failed to join url path: %v", err)
+		res.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 
 	res.Header().Set("Content-Type", "text/plain")
 	res.WriteHeader(http.StatusCreated)
@@ -71,11 +81,18 @@ func (h *URLHandler) CreateShortURL(res http.ResponseWriter, req *http.Request) 
 
 	shortID, err := h.service.ShortenURL(request.URL)
 	if err != nil {
-		res.WriteHeader(http.StatusBadRequest)
+		log.Printf("failed to shorten url %q: %v", request.URL, err)
+		res.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	shortURL := fmt.Sprintf("%s/%s", h.baseURL, shortID)
+	shortURL, err := url.JoinPath(h.baseURL, shortID)
+
+	if err != nil {
+		log.Printf("failed to join url path: %v", err)
+		res.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 
 	response := model.ShortenResponse{
 		Result: shortURL,
@@ -99,14 +116,15 @@ func (h *URLHandler) GetOriginalURL(res http.ResponseWriter, req *http.Request) 
 
 	originalURL, err := h.service.GetOriginalURL(shortID)
 	if err != nil {
-		res.WriteHeader(http.StatusBadRequest)
+		if errors.Is(err, repository.ErrNotFound) {
+			res.WriteHeader(http.StatusNotFound)
+			return
+		}
+		log.Printf("failed to get original url for id %q: %v", shortID, err)
+		res.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	if originalURL == "" {
-		res.WriteHeader(http.StatusBadRequest)
-		return
-	}
 
 	res.Header().Set("Location", originalURL)
 	res.WriteHeader(http.StatusTemporaryRedirect)

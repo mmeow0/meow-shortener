@@ -168,8 +168,8 @@ func TestHandleGet_NotFound(t *testing.T) {
 	res := w.Result()
 	defer res.Body.Close()
 
-	if res.StatusCode != http.StatusBadRequest {
-		t.Errorf("ожидался статус 400 для несуществующего ID, получен %d", res.StatusCode)
+	if res.StatusCode != http.StatusNotFound {
+		t.Errorf("ожидался статус 404 для несуществующего ID, получен %d", res.StatusCode)
 	}
 }
 

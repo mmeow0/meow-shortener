@@ -1,6 +1,8 @@
 package service
 
 import (
+	"errors"
+	"fmt"
 	"math/rand"
 	"time"
 
@@ -8,13 +10,18 @@ import (
 	"github.com/mmeow0/meow-shortener/internal/repository"
 )
 
+type URLRepository interface {
+	Save(url *model.URL) error
+	FindByID(id string) (*model.URL, error)
+}
+
 // URLService содержит бизнес-логику работы с URL
 type URLService struct {
-	repo repository.URLRepository
+	repo URLRepository
 	rand *rand.Rand
 }
 
-func NewURLService(repo repository.URLRepository) *URLService {
+func NewURLService(repo URLRepository) *URLService {
 	return &URLService{
 		repo: repo,
 		rand: rand.New(rand.NewSource(time.Now().UnixNano())),
@@ -23,19 +30,38 @@ func NewURLService(repo repository.URLRepository) *URLService {
 
 // ShortenURL создаёт короткий URL из оригинального
 func (s *URLService) ShortenURL(originalURL string) (string, error) {
-	shortID := s.generateShortID()
+	const maxAttempts = 5
 
-	url := &model.URL{
-		ID:          shortID,
-		OriginalURL: originalURL,
-	}
+	for i := 0; i < maxAttempts; i++ {
+		shortID := s.generateShortID()
 
-	err := s.repo.Save(url)
-	if err != nil {
+		url := &model.URL{
+			ID:          shortID,
+			OriginalURL: originalURL,
+		}
+
+		err := s.repo.Save(url)
+		if err == nil {
+			return shortID, nil
+		}
+
+		if errors.Is(err, repository.ErrAlreadyExists) {
+			existing, findErr := s.repo.FindByID(shortID)
+			if findErr != nil {
+				// неожиданная ошибка репозитория
+				return "", fmt.Errorf("failed to check existing ID %q: %w", shortID, findErr)
+			}
+
+			if existing.OriginalURL == originalURL {
+				return shortID, nil
+			}
+			continue
+		}
+
 		return "", err
 	}
 
-	return shortID, nil
+	return "", fmt.Errorf("failed to obtain unique id after %d attempts", maxAttempts)
 }
 
 // GetOriginalURL возвращает оригинальный URL по короткому идентификатору
@@ -43,10 +69,6 @@ func (s *URLService) GetOriginalURL(shortID string) (string, error) {
 	url, err := s.repo.FindByID(shortID)
 	if err != nil {
 		return "", err
-	}
-
-	if url == nil {
-		return "", nil
 	}
 
 	return url.OriginalURL, nil
