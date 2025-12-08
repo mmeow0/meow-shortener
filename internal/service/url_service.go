@@ -46,15 +46,6 @@ func (s *URLService) ShortenURL(originalURL string) (string, error) {
 		}
 
 		if errors.Is(err, repository.ErrAlreadyExists) {
-			existing, findErr := s.repo.FindByID(shortID)
-			if findErr != nil {
-				// неожиданная ошибка репозитория
-				return "", fmt.Errorf("failed to check existing ID %q: %w", shortID, findErr)
-			}
-
-			if existing.OriginalURL == originalURL {
-				return shortID, nil
-			}
 			continue
 		}
 
