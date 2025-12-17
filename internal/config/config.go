@@ -4,22 +4,32 @@ import (
 	"errors"
 	"flag"
 	"net/url"
+
+	"github.com/caarlos0/env/v6"
 )
 
 type Config struct {
-	// ServerAddress - адрес запуска HTTP-сервера
-	ServerAddress string
-	// BaseURL - базовый адрес результирующего сокращённого URL
-	BaseURL string
+	// Адрес запуска HTTP-сервера
+	ServerAddress string `env:"SERVER_ADDRESS" envDefault:"localhost:8080"`
+
+	// Базовый адрес результирующего сокращённого URL
+	BaseURL string `env:"BASE_URL" envDefault:"http://localhost:8080"`
 }
 
 func NewConfig() (*Config, error) {
 	cfg := &Config{}
 
+	// Флаги командной строки
 	flag.StringVar(&cfg.ServerAddress, "a", "localhost:8080", "Адрес запуска HTTP-сервера")
-	flag.StringVar(&cfg.BaseURL, "b", "http://localhost:8080", "Базовый адрес результирующего сокращённого URL")
+	flag.StringVar(&cfg.BaseURL, "b", "http://localhost:8080", "Базовый адрес сокращённого URL")
 
 	flag.Parse()
+
+	// Переменные окружения имеют больший приоритет
+	// и перезаписвают флаги
+	if err := env.Parse(cfg); err != nil {
+		return nil, err
+	}
 
 	if err := cfg.validate(); err != nil {
 		return nil, err
