@@ -14,7 +14,8 @@ import (
 )
 
 func setupHandler() (*URLHandler, *chi.Mux) {
-	repo := repository.NewInMemoryURLRepository()
+	repo, _ := repository.NewFileURLRepository("../../logs.log")
+
 	svc := service.NewURLService(repo)
 	h := NewURLHandler(svc, "http://localhost:8080")
 

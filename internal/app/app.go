@@ -5,9 +5,11 @@ import (
 
 	"github.com/mmeow0/meow-shortener/internal/config"
 	"github.com/mmeow0/meow-shortener/internal/handler"
+	"github.com/mmeow0/meow-shortener/internal/logger"
 	"github.com/mmeow0/meow-shortener/internal/repository"
 	"github.com/mmeow0/meow-shortener/internal/router"
 	"github.com/mmeow0/meow-shortener/internal/service"
+	"go.uber.org/zap"
 )
 
 type App struct {
@@ -21,7 +23,15 @@ func InitializeApp() (*App, error) {
 		return nil, err
 	}
 
-	urlRepo := repository.NewInMemoryURLRepository()
+	if err := logger.Initialize(cfg.LogLevel); err != nil {
+		return nil, err
+	}
+
+	// Используем файловое хранилище
+	urlRepo, err := repository.NewFileURLRepository(cfg.FileStoragePath)
+	if err != nil {
+		return nil, err
+	}
 	urlService := service.NewURLService(urlRepo)
 	urlHandler := handler.NewURLHandler(urlService, cfg.BaseURL)
 	rt := router.NewRouter(urlHandler)
@@ -33,5 +43,6 @@ func InitializeApp() (*App, error) {
 }
 
 func (a *App) Run() error {
+	logger.Log.Info("Running server", zap.String("address", a.cfg.ServerAddress))
 	return http.ListenAndServe(a.cfg.ServerAddress, a.router)
 }

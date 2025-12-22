@@ -1,7 +1,10 @@
 package repository
 
 import (
+	"bufio"
+	"encoding/json"
 	"errors"
+	"os"
 	"sync"
 
 	"github.com/mmeow0/meow-shortener/internal/model"
@@ -10,20 +13,63 @@ import (
 var ErrNotFound = errors.New("url not found")
 var ErrAlreadyExists = errors.New("url id already exists")
 
-// InMemoryURLRepository реализация хранилища URL в памяти
-type InMemoryURLRepository struct {
-	mu   sync.Mutex
-	urls map[string]*model.URL
+// FileURLRepository реализация хранилища URL с сохранением в файл
+type FileURLRepository struct {
+	mu       sync.Mutex
+	urls     map[string]*model.URL
+	filePath string
+	file     *os.File
+	encoder  *json.Encoder
 }
 
-func NewInMemoryURLRepository() *InMemoryURLRepository {
-	return &InMemoryURLRepository{
-		urls: make(map[string]*model.URL),
+func NewFileURLRepository(filePath string) (*FileURLRepository, error) {
+	repo := &FileURLRepository{
+		urls:     make(map[string]*model.URL),
+		filePath: filePath,
 	}
+
+	// Загружаем существующие данные из файла
+	if err := repo.loadFromFile(); err != nil {
+		return nil, err
+	}
+
+	// Открываем файл для записи (append режим)
+	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
+	if err != nil {
+		return nil, err
+	}
+
+	repo.file = file
+	repo.encoder = json.NewEncoder(file)
+
+	return repo, nil
 }
 
-// Save сохраняет URL в хранилище
-func (r *InMemoryURLRepository) Save(url *model.URL) error {
+// loadFromFile загружает данные из файла при старте
+func (r *FileURLRepository) loadFromFile() error {
+	file, err := os.Open(r.filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // Файл не существует - это нормально
+		}
+		return err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		var url model.URL
+		if err := json.Unmarshal(scanner.Bytes(), &url); err != nil {
+			continue // Пропускаем битые записи
+		}
+		r.urls[url.ID] = &url
+	}
+
+	return scanner.Err()
+}
+
+// Save сохраняет URL в хранилище и в файл
+func (r *FileURLRepository) Save(url *model.URL) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -32,11 +78,17 @@ func (r *InMemoryURLRepository) Save(url *model.URL) error {
 	}
 
 	r.urls[url.ID] = url
+
+	// Записываем в файл
+	if err := r.encoder.Encode(url); err != nil {
+		return err
+	}
+
 	return nil
 }
 
 // FindByID находит URL по идентификатору
-func (r *InMemoryURLRepository) FindByID(id string) (*model.URL, error) {
+func (r *FileURLRepository) FindByID(id string) (*model.URL, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -47,3 +99,4 @@ func (r *InMemoryURLRepository) FindByID(id string) (*model.URL, error) {
 
 	return url, nil
 }
+
