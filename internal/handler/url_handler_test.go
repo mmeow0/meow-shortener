@@ -392,3 +392,48 @@ func TestHandlePost_PlainText_Integration(t *testing.T) {
 		t.Errorf("ожидался Location: %s, получен %s", originalURL, location)
 	}
 }
+
+
+func TestHandlePost_API_Shorten_Example(t *testing.T) {
+	_, r := setupHandler()
+
+	requestBody := `{"url":"https://practicum.yandex.ru"}`
+	body := strings.NewReader(requestBody)
+	req := httptest.NewRequest(http.MethodPost, "/api/shorten", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+
+	res := w.Result()
+	defer res.Body.Close()
+
+	// Проверяем статус 201
+	if res.StatusCode != http.StatusCreated {
+		t.Errorf("ожидался статус 201, получен %d", res.StatusCode)
+	}
+
+	// Проверяем Content-Type
+	contentType := res.Header.Get("Content-Type")
+	if contentType != "application/json" {
+		t.Errorf("ожидался Content-Type application/json, получен %s", contentType)
+	}
+
+	// Проверяем структуру ответа
+	var response model.ShortenResponse
+	err := json.NewDecoder(res.Body).Decode(&response)
+	if err != nil {
+		t.Fatalf("ошибка декодирования JSON ответа: %v", err)
+	}
+
+	// Проверяем, что результат содержит короткий URL
+	if !strings.HasPrefix(response.Result, "http://localhost:8080/") {
+		t.Errorf("ожидался короткий URL с префиксом http://localhost:8080/, получен %s", response.Result)
+	}
+
+	// Проверяем длину ID (должна быть 8 символов)
+	shortID := strings.TrimPrefix(response.Result, "http://localhost:8080/")
+	if len(shortID) != 8 {
+		t.Errorf("ожидалась длина короткого ID = 8 символов, получен ID: %s", shortID)
+	}
+}
