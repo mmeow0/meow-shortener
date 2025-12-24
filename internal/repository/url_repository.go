@@ -16,7 +16,7 @@ var ErrAlreadyExists = errors.New("url id already exists")
 // FileURLRepository реализация хранилища URL с сохранением в файл
 type FileURLRepository struct {
 	mu       sync.Mutex
-	urls     map[string]*model.URL
+	urls     map[string]*model.URL // ключ - ShortURL
 	filePath string
 	file     *os.File
 	encoder  *json.Encoder
@@ -62,7 +62,7 @@ func (r *FileURLRepository) loadFromFile() error {
 		if err := json.Unmarshal(scanner.Bytes(), &url); err != nil {
 			continue // Пропускаем битые записи
 		}
-		r.urls[url.ID] = &url
+		r.urls[url.ShortURL] = &url
 	}
 
 	return scanner.Err()
@@ -73,11 +73,11 @@ func (r *FileURLRepository) Save(url *model.URL) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if _, exists := r.urls[url.ID]; exists {
+	if _, exists := r.urls[url.ShortURL]; exists {
 		return ErrAlreadyExists
 	}
 
-	r.urls[url.ID] = url
+	r.urls[url.ShortURL] = url
 
 	// Записываем в файл
 	if err := r.encoder.Encode(url); err != nil {
@@ -87,7 +87,7 @@ func (r *FileURLRepository) Save(url *model.URL) error {
 	return nil
 }
 
-// FindByID находит URL по идентификатору
+// FindByID находит URL по короткому идентификатору
 func (r *FileURLRepository) FindByID(id string) (*model.URL, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -100,3 +100,38 @@ func (r *FileURLRepository) FindByID(id string) (*model.URL, error) {
 	return url, nil
 }
 
+// GetAll возвращает все URL из хранилища
+func (r *FileURLRepository) GetAll() ([]*model.URL, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	urls := make([]*model.URL, 0, len(r.urls))
+	for _, url := range r.urls {
+		urls = append(urls, url)
+	}
+
+	return urls, nil
+}
+
+// GetByUserID возвращает все URL конкретного пользователя
+func (r *FileURLRepository) GetByUserID(userID string) ([]*model.URL, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	urls := make([]*model.URL, 0)
+	for _, url := range r.urls {
+		if url.UserID == userID {
+			urls = append(urls, url)
+		}
+	}
+
+	return urls, nil
+}
+
+// Close закрывает файл
+func (r *FileURLRepository) Close() error {
+	if r.file != nil {
+		return r.file.Close()
+	}
+	return nil
+}

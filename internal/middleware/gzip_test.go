@@ -1,4 +1,4 @@
-package middleware
+package middleware_test
 
 import (
 	"bytes"
@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/mmeow0/meow-shortener/internal/handler"
+	"github.com/mmeow0/meow-shortener/internal/middleware"
 	"github.com/mmeow0/meow-shortener/internal/model"
 	"github.com/mmeow0/meow-shortener/internal/repository"
 	"github.com/mmeow0/meow-shortener/internal/service"
@@ -23,7 +24,7 @@ func setupTestHandler() http.Handler {
 	h := handler.NewURLHandler(svc, "http://localhost:8080")
 
 	r := chi.NewRouter()
-	r.Use(GzipMiddleware)
+	r.Use(middleware.GzipMiddleware)
 	r.Post("/api/shorten", h.CreateShortURL)
 	r.Post("/", h.CreateShortURLPlain)
 

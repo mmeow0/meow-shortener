@@ -15,6 +15,7 @@ import (
 type App struct {
 	cfg    *config.Config
 	router http.Handler
+	repo   *repository.FileURLRepository
 }
 
 func InitializeApp() (*App, error) {
@@ -39,10 +40,12 @@ func InitializeApp() (*App, error) {
 	return &App{
 		cfg:    cfg,
 		router: rt,
+		repo:   urlRepo,
 	}, nil
 }
 
 func (a *App) Run() error {
 	logger.Log.Info("Running server", zap.String("address", a.cfg.ServerAddress))
+	defer a.repo.Close() // Закрываем файл при завершении работы
 	return http.ListenAndServe(a.cfg.ServerAddress, a.router)
 }

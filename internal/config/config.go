@@ -19,7 +19,7 @@ type Config struct {
 	LogLevel string `env:"LOG_LEVEL" envDefault:"FATAL"`
 
 	// Путь к файлу для хранения URL
-	FileStoragePath string `env:"FILE_STORAGE_PATH" envDefault:""`
+	FileStoragePath string `env:"FILE_STORAGE_PATH" envDefault:"/tmp/short-url-db.json"`
 }
 
 func NewConfig() (*Config, error) {
