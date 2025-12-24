@@ -3,7 +3,9 @@ package config
 import (
 	"errors"
 	"flag"
+	"fmt"
 	"net/url"
+	"os"
 
 	"github.com/caarlos0/env/v6"
 )
@@ -37,6 +39,15 @@ func NewConfig() (*Config, error) {
 	// и перезаписвают флаги
 	if err := env.Parse(cfg); err != nil {
 		return nil, err
+	}
+
+	// Обработка SERVER_PORT - если задан, он перезаписывает ServerAddress и BaseURL
+	if port := os.Getenv("SERVER_PORT"); port != "" {
+		cfg.ServerAddress = fmt.Sprintf("localhost:%s", port)
+		// Обновляем BaseURL только если он имеет значение по умолчанию
+		if cfg.BaseURL == "http://localhost:8080" {
+			cfg.BaseURL = fmt.Sprintf("http://localhost:%s", port)
+		}
 	}
 
 	if err := cfg.validate(); err != nil {
