@@ -27,11 +27,15 @@ type Config struct {
 func NewConfig() (*Config, error) {
 	cfg := &Config{}
 
+	// Дополнительный флаг для порта
+	var serverPort string
+
 	// Флаги командной строки
 	flag.StringVar(&cfg.ServerAddress, "a", "localhost:8080", "Адрес запуска HTTP-сервера")
 	flag.StringVar(&cfg.BaseURL, "b", "http://localhost:8080", "Базовый адрес сокращённого URL")
 	flag.StringVar(&cfg.LogLevel, "l", "FATAL", "Уровень логирования")
 	flag.StringVar(&cfg.FileStoragePath, "f", "/tmp/short-url-db.json", "Путь к файлу для хранения URL")
+	flag.StringVar(&serverPort, "server-port", "", "Порт для запуска сервера")
 
 	flag.Parse()
 
@@ -42,11 +46,16 @@ func NewConfig() (*Config, error) {
 	}
 
 	// Обработка SERVER_PORT - если задан, он перезаписывает ServerAddress и BaseURL
-	if port := os.Getenv("SERVER_PORT"); port != "" {
-		cfg.ServerAddress = fmt.Sprintf("localhost:%s", port)
+	if port := os.Getenv("SERVER_PORT"); port != "" && serverPort == "" {
+		serverPort = port
+	}
+
+	// Если указан serverPort (из флага или переменной окружения), он перезаписывает ServerAddress и BaseURL
+	if serverPort != "" {
+		cfg.ServerAddress = fmt.Sprintf("localhost:%s", serverPort)
 		// Обновляем BaseURL только если он имеет значение по умолчанию
 		if cfg.BaseURL == "http://localhost:8080" {
-			cfg.BaseURL = fmt.Sprintf("http://localhost:%s", port)
+			cfg.BaseURL = fmt.Sprintf("http://localhost:%s", serverPort)
 		}
 	}
 
