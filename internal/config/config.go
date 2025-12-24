@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-
-	"github.com/caarlos0/env/v6"
 )
 
 type Config struct {
@@ -24,29 +22,44 @@ type Config struct {
 	FileStoragePath string `env:"FILE_STORAGE_PATH" envDefault:"/tmp/short-url-db.json"`
 }
 
+var (
+	flagServerAddress   = flag.String("a", "localhost:8080", "Адрес запуска HTTP-сервера")
+	flagBaseURL         = flag.String("b", "http://localhost:8080", "Базовый адрес сокращённого URL")
+	flagLogLevel        = flag.String("l", "FATAL", "Уровень логирования")
+	flagFileStoragePath = flag.String("f", "/tmp/short-url-db.json", "Путь к файлу для хранения URL")
+	flagServerPort      = flag.String("server-port", "", "Порт для запуска сервера")
+)
+
 func NewConfig() (*Config, error) {
-	cfg := &Config{}
+	// Парсим флаги только если они ещё не распарсены
+	if !flag.Parsed() {
+		flag.Parse()
+	}
 
-	// Дополнительный флаг для порта
-	var serverPort string
+	cfg := &Config{
+		ServerAddress:   *flagServerAddress,
+		BaseURL:         *flagBaseURL,
+		LogLevel:        *flagLogLevel,
+		FileStoragePath: *flagFileStoragePath,
+	}
 
-	// Флаги командной строки
-	flag.StringVar(&cfg.ServerAddress, "a", "localhost:8080", "Адрес запуска HTTP-сервера")
-	flag.StringVar(&cfg.BaseURL, "b", "http://localhost:8080", "Базовый адрес сокращённого URL")
-	flag.StringVar(&cfg.LogLevel, "l", "FATAL", "Уровень логирования")
-	flag.StringVar(&cfg.FileStoragePath, "f", "/tmp/short-url-db.json", "Путь к файлу для хранения URL")
-	flag.StringVar(&serverPort, "server-port", "", "Порт для запуска сервера")
-
-	flag.Parse()
-
-	// Переменные окружения имеют больший приоритет
-	// и перезаписвают флаги
-	if err := env.Parse(cfg); err != nil {
-		return nil, err
+	// Переменные окружения перезаписывают флаги, если они установлены 
+	if val := os.Getenv("SERVER_ADDRESS"); val != "" {
+		cfg.ServerAddress = val
+	}
+	if val := os.Getenv("BASE_URL"); val != "" {
+		cfg.BaseURL = val
+	}
+	if val := os.Getenv("LOG_LEVEL"); val != "" {
+		cfg.LogLevel = val
+	}
+	if val := os.Getenv("FILE_STORAGE_PATH"); val != "" {
+		cfg.FileStoragePath = val
 	}
 
 	// Обработка SERVER_PORT - если задан, он перезаписывает ServerAddress и BaseURL
-	if port := os.Getenv("SERVER_PORT"); port != "" && serverPort == "" {
+	serverPort := *flagServerPort
+	if port := os.Getenv("SERVER_PORT"); port != "" {
 		serverPort = port
 	}
 
