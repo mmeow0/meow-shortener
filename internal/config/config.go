@@ -31,7 +31,7 @@ func NewConfig() (*Config, error) {
 	flag.StringVar(&cfg.ServerAddress, "a", "localhost:8080", "Адрес запуска HTTP-сервера")
 	flag.StringVar(&cfg.BaseURL, "b", "http://localhost:8080", "Базовый адрес сокращённого URL")
 	flag.StringVar(&cfg.LogLevel, "l", "FATAL", "Уровень логирования")
-	flag.StringVar(&cfg.FileStoragePath, "f", "", "Путь к файлу для хранения URL")
+	flag.StringVar(&cfg.FileStoragePath, "f", "/tmp/short-url-db.json", "Путь к файлу для хранения URL")
 
 	flag.Parse()
 
