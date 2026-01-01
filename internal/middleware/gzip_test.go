@@ -16,12 +16,26 @@ import (
 	"github.com/mmeow0/meow-shortener/internal/model"
 	"github.com/mmeow0/meow-shortener/internal/repository"
 	"github.com/mmeow0/meow-shortener/internal/service"
+	"go.uber.org/zap"
 )
 
-func setupTestHandler() http.Handler {
-	repo, _ := repository.NewFileURLRepository("../../logs.log")
+func setupTestHandler(t *testing.T) http.Handler {
+	tempDir := t.TempDir()
+	tempFile := tempDir + "/test_storage.log"
+
+	repo, err := repository.NewFileURLRepository(tempFile)
+	if err != nil {
+		t.Fatalf("не удалось создать репозиторий: %v", err)
+	}
+
+	// Создаём логер для тестов
+	logger, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatalf("не удалось создать логер: %v", err)
+	}
+
 	svc := service.NewURLService(repo)
-	h := handler.NewURLHandler(svc, "http://localhost:8080")
+	h := handler.NewURLHandler(svc, "http://localhost:8080", logger)
 
 	r := chi.NewRouter()
 	r.Use(middleware.GzipMiddleware)
@@ -32,7 +46,7 @@ func setupTestHandler() http.Handler {
 }
 
 func TestGzipCompression(t *testing.T) {
-	handler := setupTestHandler()
+	handler := setupTestHandler(t)
 
 	srv := httptest.NewServer(handler)
 	defer srv.Close()

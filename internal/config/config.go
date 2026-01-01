@@ -43,23 +43,23 @@ func NewConfig() (*Config, error) {
 		FileStoragePath: *flagFileStoragePath,
 	}
 
-	// Переменные окружения перезаписывают флаги, если они установлены 
-	if val := os.Getenv("SERVER_ADDRESS"); val != "" {
+	// Переменные окружения перезаписывают флаги, если они установлены
+	if val, ok := os.LookupEnv("SERVER_ADDRESS"); ok {
 		cfg.ServerAddress = val
 	}
-	if val := os.Getenv("BASE_URL"); val != "" {
+	if val, ok := os.LookupEnv("BASE_URL"); ok {
 		cfg.BaseURL = val
 	}
-	if val := os.Getenv("LOG_LEVEL"); val != "" {
+	if val, ok := os.LookupEnv("LOG_LEVEL"); ok {
 		cfg.LogLevel = val
 	}
-	if val := os.Getenv("FILE_STORAGE_PATH"); val != "" {
+	if val, ok := os.LookupEnv("FILE_STORAGE_PATH"); ok {
 		cfg.FileStoragePath = val
 	}
 
 	// Обработка SERVER_PORT - если задан, он перезаписывает ServerAddress и BaseURL
 	serverPort := *flagServerPort
-	if port := os.Getenv("SERVER_PORT"); port != "" {
+	if port, ok := os.LookupEnv("SERVER_PORT"); ok {
 		serverPort = port
 	}
 
@@ -96,7 +96,6 @@ func (c *Config) validate() error {
 	if parsedURL.Scheme == "" || parsedURL.Host == "" {
 		return errors.New("base URL must contain scheme and host")
 	}
-
 
 	if c.FileStoragePath == "" {
 		return errors.New("file storage path is empty")

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"sync"
 
@@ -13,19 +14,87 @@ import (
 var ErrNotFound = errors.New("url not found")
 var ErrAlreadyExists = errors.New("url id already exists")
 
-// FileURLRepository реализация хранилища URL с сохранением в файл
+// InMemoryURLRepository базовая реализация хранилища URL в памяти
+type InMemoryURLRepository struct {
+	mu   sync.RWMutex
+	urls map[string]*model.URL // ключ - ShortURL
+}
+
+func NewInMemoryURLRepository() *InMemoryURLRepository {
+	return &InMemoryURLRepository{
+		urls: make(map[string]*model.URL),
+	}
+}
+
+// Save сохраняет URL в хранилище
+func (r *InMemoryURLRepository) Save(url *model.URL) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if _, exists := r.urls[url.ShortURL]; exists {
+		return fmt.Errorf("%w: %s", ErrAlreadyExists, url.ShortURL)
+	}
+
+	r.urls[url.ShortURL] = url
+	return nil
+}
+
+// FindByID находит URL по короткому идентификатору
+func (r *InMemoryURLRepository) FindByID(id string) (*model.URL, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	url, exists := r.urls[id]
+	if !exists {
+		return nil, ErrNotFound
+	}
+
+	return url, nil
+}
+
+// GetAll возвращает все URL из хранилища
+func (r *InMemoryURLRepository) GetAll() ([]*model.URL, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	urls := make([]*model.URL, 0, len(r.urls))
+	for _, url := range r.urls {
+		urls = append(urls, url)
+	}
+
+	return urls, nil
+}
+
+// GetByUserID возвращает все URL конкретного пользователя
+func (r *InMemoryURLRepository) GetByUserID(userID string) ([]*model.URL, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	urls := make([]*model.URL, 0)
+	for _, url := range r.urls {
+		if url.UserID == userID {
+			urls = append(urls, url)
+		}
+	}
+
+	return urls, nil
+}
+
+// FileURLRepository декоратор над InMemoryURLRepository с сохранением в файл
 type FileURLRepository struct {
-	mu       sync.Mutex
-	urls     map[string]*model.URL // ключ - ShortURL
+	*InMemoryURLRepository
 	filePath string
 	file     *os.File
 	encoder  *json.Encoder
+	mu       sync.Mutex // отдельная блокировка для операций с файлом
 }
 
 func NewFileURLRepository(filePath string) (*FileURLRepository, error) {
+	inMemoryRepo := NewInMemoryURLRepository()
+
 	repo := &FileURLRepository{
-		urls:     make(map[string]*model.URL),
-		filePath: filePath,
+		InMemoryURLRepository: inMemoryRepo,
+		filePath:              filePath,
 	}
 
 	// Загружаем существующие данные из файла
@@ -62,70 +131,33 @@ func (r *FileURLRepository) loadFromFile() error {
 		if err := json.Unmarshal(scanner.Bytes(), &url); err != nil {
 			continue // Пропускаем битые записи
 		}
-		r.urls[url.ShortURL] = &url
+		// Используем прямой доступ к map, т.к. это загрузка при инициализации
+		r.InMemoryURLRepository.urls[url.ShortURL] = &url
 	}
 
 	return scanner.Err()
 }
 
-// Save сохраняет URL в хранилище и в файл
+// Save переопределяет метод Save, добавляя запись в файл
 func (r *FileURLRepository) Save(url *model.URL) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if _, exists := r.urls[url.ShortURL]; exists {
-		return ErrAlreadyExists
-	}
-
-	r.urls[url.ShortURL] = url
-
-	// Записываем в файл
-	if err := r.encoder.Encode(url); err != nil {
+	// Сначала сохраняем в памяти
+	if err := r.InMemoryURLRepository.Save(url); err != nil {
 		return err
 	}
 
+	// Затем записываем в файл
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if err := r.encoder.Encode(url); err != nil {
+		// Если не удалось записать в файл, нужно откатить изменения в памяти
+		r.InMemoryURLRepository.mu.Lock()
+		delete(r.InMemoryURLRepository.urls, url.ShortURL)
+		r.InMemoryURLRepository.mu.Unlock()
+		return fmt.Errorf("failed to write to file: %w", err)
+	}
+
 	return nil
-}
-
-// FindByID находит URL по короткому идентификатору
-func (r *FileURLRepository) FindByID(id string) (*model.URL, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	url, exists := r.urls[id]
-	if !exists {
-		return nil, ErrNotFound
-	}
-
-	return url, nil
-}
-
-// GetAll возвращает все URL из хранилища
-func (r *FileURLRepository) GetAll() ([]*model.URL, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	urls := make([]*model.URL, 0, len(r.urls))
-	for _, url := range r.urls {
-		urls = append(urls, url)
-	}
-
-	return urls, nil
-}
-
-// GetByUserID возвращает все URL конкретного пользователя
-func (r *FileURLRepository) GetByUserID(userID string) ([]*model.URL, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	urls := make([]*model.URL, 0)
-	for _, url := range r.urls {
-		if url.UserID == userID {
-			urls = append(urls, url)
-		}
-	}
-
-	return urls, nil
 }
 
 // Close закрывает файл

@@ -11,13 +11,26 @@ import (
 	"github.com/mmeow0/meow-shortener/internal/model"
 	"github.com/mmeow0/meow-shortener/internal/repository"
 	"github.com/mmeow0/meow-shortener/internal/service"
+	"go.uber.org/zap"
 )
 
-func setupHandler() (*URLHandler, *chi.Mux) {
-	repo, _ := repository.NewFileURLRepository("../../logs.log")
+func setupHandler(t *testing.T) (*URLHandler, *chi.Mux) {
+	tempDir := t.TempDir()
+	tempFile := tempDir + "/test_storage.log"
+
+	repo, err := repository.NewFileURLRepository(tempFile)
+	if err != nil {
+		t.Fatalf("не удалось создать репозиторий: %v", err)
+	}
+
+	// Создаём логер для тестов
+	logger, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatalf("не удалось создать логер: %v", err)
+	}
 
 	svc := service.NewURLService(repo)
-	h := NewURLHandler(svc, "http://localhost:8080")
+	h := NewURLHandler(svc, "http://localhost:8080", logger)
 
 	r := chi.NewRouter()
 	r.Post("/", h.CreateShortURLPlain)
@@ -28,7 +41,7 @@ func setupHandler() (*URLHandler, *chi.Mux) {
 }
 
 func TestHandlePost_Success(t *testing.T) {
-	_, r := setupHandler()
+	_, r := setupHandler(t)
 
 	requestBody := `{"url":"https://practicum.yandex.ru/"}`
 	body := strings.NewReader(requestBody)
@@ -67,7 +80,7 @@ func TestHandlePost_Success(t *testing.T) {
 }
 
 func TestHandlePost_EmptyBody(t *testing.T) {
-	_, r := setupHandler()
+	_, r := setupHandler(t)
 
 	body := strings.NewReader("")
 	req := httptest.NewRequest(http.MethodPost, "/api/shorten", body)
@@ -85,7 +98,7 @@ func TestHandlePost_EmptyBody(t *testing.T) {
 }
 
 func TestHandlePost_WhitespaceBody(t *testing.T) {
-	_, r := setupHandler()
+	_, r := setupHandler(t)
 
 	requestBody := `{"url":"   \n\t   "}`
 	body := strings.NewReader(requestBody)
@@ -104,7 +117,7 @@ func TestHandlePost_WhitespaceBody(t *testing.T) {
 }
 
 func TestHandlePost_InvalidPath(t *testing.T) {
-	_, r := setupHandler()
+	_, r := setupHandler(t)
 
 	requestBody := `{"url":"https://example.com"}`
 	body := strings.NewReader(requestBody)
@@ -123,7 +136,7 @@ func TestHandlePost_InvalidPath(t *testing.T) {
 }
 
 func TestHandleGet_Success(t *testing.T) {
-	_, r := setupHandler()
+	_, r := setupHandler(t)
 
 	originalURL := "https://practicum.yandex.ru/"
 
@@ -159,7 +172,7 @@ func TestHandleGet_Success(t *testing.T) {
 }
 
 func TestHandleGet_NotFound(t *testing.T) {
-	_, r := setupHandler()
+	_, r := setupHandler(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/nonexistent", nil)
 	w := httptest.NewRecorder()
@@ -175,7 +188,7 @@ func TestHandleGet_NotFound(t *testing.T) {
 }
 
 func TestHandleGet_RootPath(t *testing.T) {
-	_, r := setupHandler()
+	_, r := setupHandler(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
@@ -191,7 +204,7 @@ func TestHandleGet_RootPath(t *testing.T) {
 }
 
 func TestHandleGet_NestedPath(t *testing.T) {
-	_, r := setupHandler()
+	_, r := setupHandler(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/some/nested/path", nil)
 	w := httptest.NewRecorder()
@@ -207,7 +220,7 @@ func TestHandleGet_NestedPath(t *testing.T) {
 }
 
 func TestHandleRoot_UnsupportedMethod(t *testing.T) {
-	_, r := setupHandler()
+	_, r := setupHandler(t)
 
 	methods := []string{
 		http.MethodPut,
@@ -236,7 +249,7 @@ func TestHandleRoot_UnsupportedMethod(t *testing.T) {
 }
 
 func TestHandlePost_MultipleURLs(t *testing.T) {
-	_, r := setupHandler()
+	_, r := setupHandler(t)
 
 	urls := []string{
 		"https://practicum.yandex.ru/",
@@ -293,7 +306,7 @@ func TestHandlePost_MultipleURLs(t *testing.T) {
 }
 
 func TestHandlePost_PlainText_Success(t *testing.T) {
-	_, r := setupHandler()
+	_, r := setupHandler(t)
 
 	body := strings.NewReader("https://practicum.yandex.ru/")
 	req := httptest.NewRequest(http.MethodPost, "/", body)
@@ -326,7 +339,7 @@ func TestHandlePost_PlainText_Success(t *testing.T) {
 }
 
 func TestHandlePost_PlainText_EmptyBody(t *testing.T) {
-	_, r := setupHandler()
+	_, r := setupHandler(t)
 
 	body := strings.NewReader("")
 	req := httptest.NewRequest(http.MethodPost, "/", body)
@@ -343,7 +356,7 @@ func TestHandlePost_PlainText_EmptyBody(t *testing.T) {
 }
 
 func TestHandlePost_PlainText_WhitespaceBody(t *testing.T) {
-	_, r := setupHandler()
+	_, r := setupHandler(t)
 
 	body := strings.NewReader("   \n\t   ")
 	req := httptest.NewRequest(http.MethodPost, "/", body)
@@ -360,7 +373,7 @@ func TestHandlePost_PlainText_WhitespaceBody(t *testing.T) {
 }
 
 func TestHandlePost_PlainText_Integration(t *testing.T) {
-	_, r := setupHandler()
+	_, r := setupHandler(t)
 
 	// Создаем короткий URL через text/plain API
 	originalURL := "https://practicum.yandex.ru/"
@@ -393,9 +406,8 @@ func TestHandlePost_PlainText_Integration(t *testing.T) {
 	}
 }
 
-
 func TestHandlePost_API_Shorten_Example(t *testing.T) {
-	_, r := setupHandler()
+	_, r := setupHandler(t)
 
 	requestBody := `{"url":"https://practicum.yandex.ru"}`
 	body := strings.NewReader(requestBody)

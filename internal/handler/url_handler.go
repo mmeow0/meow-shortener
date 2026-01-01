@@ -14,17 +14,20 @@ import (
 	"github.com/mmeow0/meow-shortener/internal/model"
 	"github.com/mmeow0/meow-shortener/internal/repository"
 	"github.com/mmeow0/meow-shortener/internal/service"
+	"go.uber.org/zap"
 )
 
 type URLHandler struct {
 	service *service.URLService
 	baseURL string
+	logger  *zap.Logger
 }
 
-func NewURLHandler(service *service.URLService, baseURL string) *URLHandler {
+func NewURLHandler(service *service.URLService, baseURL string, logger *zap.Logger) *URLHandler {
 	return &URLHandler{
 		service: service,
 		baseURL: baseURL,
+		logger:  logger,
 	}
 }
 
@@ -44,7 +47,7 @@ func (h *URLHandler) CreateShortURLPlain(res http.ResponseWriter, req *http.Requ
 	}
 
 	// Получаем userID из контекста
-	userID := middleware.GetUserID(req.Context())
+	userID := middleware.GetUserID(req.Context(), h.logger)
 
 	shortID, err := h.service.ShortenURL(originalURL, userID)
 	if err != nil {
@@ -84,7 +87,7 @@ func (h *URLHandler) CreateShortURL(res http.ResponseWriter, req *http.Request) 
 	}
 
 	// Получаем userID из контекста
-	userID := middleware.GetUserID(req.Context())
+	userID := middleware.GetUserID(req.Context(), h.logger)
 
 	shortID, err := h.service.ShortenURL(request.URL, userID)
 	if err != nil {
@@ -109,7 +112,9 @@ func (h *URLHandler) CreateShortURL(res http.ResponseWriter, req *http.Request) 
 	res.WriteHeader(http.StatusCreated)
 
 	encoder := json.NewEncoder(res)
-	encoder.Encode(response)
+	if err := encoder.Encode(response); err != nil {
+		log.Printf("failed to encode response: %v", err)
+	}
 }
 
 // GetOriginalURL обрабатывает GET запрос для получения оригинального URL
@@ -139,7 +144,7 @@ func (h *URLHandler) GetOriginalURL(res http.ResponseWriter, req *http.Request) 
 // GetUserURLs обрабатывает GET запрос для получения всех URL пользователя
 func (h *URLHandler) GetUserURLs(res http.ResponseWriter, req *http.Request) {
 	// Получаем userID из контекста
-	userID := middleware.GetUserID(req.Context())
+	userID := middleware.GetUserID(req.Context(), h.logger)
 
 	urls, err := h.service.GetUserURLs(userID)
 	if err != nil {
@@ -173,5 +178,7 @@ func (h *URLHandler) GetUserURLs(res http.ResponseWriter, req *http.Request) {
 	res.WriteHeader(http.StatusOK)
 
 	encoder := json.NewEncoder(res)
-	encoder.Encode(response)
+	if err := encoder.Encode(response); err != nil {
+		log.Printf("failed to encode response: %v", err)
+	}
 }
