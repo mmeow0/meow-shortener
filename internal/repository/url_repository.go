@@ -1,7 +1,11 @@
 package repository
 
 import (
+	"bufio"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
 	"sync"
 
 	"github.com/mmeow0/meow-shortener/internal/model"
@@ -10,10 +14,10 @@ import (
 var ErrNotFound = errors.New("url not found")
 var ErrAlreadyExists = errors.New("url id already exists")
 
-// InMemoryURLRepository реализация хранилища URL в памяти
+// InMemoryURLRepository базовая реализация хранилища URL в памяти
 type InMemoryURLRepository struct {
-	mu   sync.Mutex
-	urls map[string]*model.URL
+	mu   sync.RWMutex
+	urls map[string]*model.URL // ключ - ShortURL
 }
 
 func NewInMemoryURLRepository() *InMemoryURLRepository {
@@ -27,18 +31,18 @@ func (r *InMemoryURLRepository) Save(url *model.URL) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if _, exists := r.urls[url.ID]; exists {
-		return ErrAlreadyExists
+	if _, exists := r.urls[url.ShortURL]; exists {
+		return fmt.Errorf("%w: %s", ErrAlreadyExists, url.ShortURL)
 	}
 
-	r.urls[url.ID] = url
+	r.urls[url.ShortURL] = url
 	return nil
 }
 
-// FindByID находит URL по идентификатору
+// FindByID находит URL по короткому идентификатору
 func (r *InMemoryURLRepository) FindByID(id string) (*model.URL, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 
 	url, exists := r.urls[id]
 	if !exists {
@@ -46,4 +50,120 @@ func (r *InMemoryURLRepository) FindByID(id string) (*model.URL, error) {
 	}
 
 	return url, nil
+}
+
+// GetAll возвращает все URL из хранилища
+func (r *InMemoryURLRepository) GetAll() ([]*model.URL, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	urls := make([]*model.URL, 0, len(r.urls))
+	for _, url := range r.urls {
+		urls = append(urls, url)
+	}
+
+	return urls, nil
+}
+
+// GetByUserID возвращает все URL конкретного пользователя
+func (r *InMemoryURLRepository) GetByUserID(userID string) ([]*model.URL, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	urls := make([]*model.URL, 0)
+	for _, url := range r.urls {
+		if url.UserID == userID {
+			urls = append(urls, url)
+		}
+	}
+
+	return urls, nil
+}
+
+// FileURLRepository декоратор над InMemoryURLRepository с сохранением в файл
+type FileURLRepository struct {
+	*InMemoryURLRepository
+	filePath string
+	file     *os.File
+	encoder  *json.Encoder
+	mu       sync.Mutex // отдельная блокировка для операций с файлом
+}
+
+func NewFileURLRepository(filePath string) (*FileURLRepository, error) {
+	inMemoryRepo := NewInMemoryURLRepository()
+
+	repo := &FileURLRepository{
+		InMemoryURLRepository: inMemoryRepo,
+		filePath:              filePath,
+	}
+
+	// Загружаем существующие данные из файла
+	if err := repo.loadFromFile(); err != nil {
+		return nil, err
+	}
+
+	// Открываем файл для записи (append режим)
+	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
+	if err != nil {
+		return nil, err
+	}
+
+	repo.file = file
+	repo.encoder = json.NewEncoder(file)
+
+	return repo, nil
+}
+
+// loadFromFile загружает данные из файла при старте
+func (r *FileURLRepository) loadFromFile() error {
+	file, err := os.Open(r.filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // Файл не существует - это нормально
+		}
+		return err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		var url model.URL
+		if err := json.Unmarshal(scanner.Bytes(), &url); err != nil {
+			continue // Пропускаем битые записи
+		}
+		// Используем прямой доступ к map, т.к. это загрузка при инициализации
+		r.InMemoryURLRepository.urls[url.ShortURL] = &url
+	}
+
+	return scanner.Err()
+}
+
+// Save переопределяет метод Save, добавляя запись в файл
+func (r *FileURLRepository) Save(url *model.URL) error {
+	// Сначала сохраняем в памяти
+	if err := r.InMemoryURLRepository.Save(url); err != nil {
+		return err
+	}
+
+	// Затем записываем в файл
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if err := r.encoder.Encode(url); err != nil {
+		// Если не удалось записать в файл, нужно откатить изменения в памяти
+		r.InMemoryURLRepository.mu.Lock()
+		delete(r.InMemoryURLRepository.urls, url.ShortURL)
+		r.InMemoryURLRepository.mu.Unlock()
+		return fmt.Errorf("failed to write to file: %w", err)
+	}
+
+	return nil
+}
+
+// Close закрывает файл
+func (r *FileURLRepository) Close() error {
+	if r.file != nil {
+		return r.file.Close()
+	}
+	return nil
 }

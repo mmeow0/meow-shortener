@@ -22,3 +22,5 @@ vendor/
 .idea
 .vscode
 shortener
+
+logs.log

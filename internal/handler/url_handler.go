@@ -10,20 +10,24 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/mmeow0/meow-shortener/internal/middleware"
 	"github.com/mmeow0/meow-shortener/internal/model"
 	"github.com/mmeow0/meow-shortener/internal/repository"
 	"github.com/mmeow0/meow-shortener/internal/service"
+	"go.uber.org/zap"
 )
 
 type URLHandler struct {
 	service *service.URLService
 	baseURL string
+	logger  *zap.Logger
 }
 
-func NewURLHandler(service *service.URLService, baseURL string) *URLHandler {
+func NewURLHandler(service *service.URLService, baseURL string, logger *zap.Logger) *URLHandler {
 	return &URLHandler{
 		service: service,
 		baseURL: baseURL,
+		logger:  logger,
 	}
 }
 
@@ -42,7 +46,10 @@ func (h *URLHandler) CreateShortURLPlain(res http.ResponseWriter, req *http.Requ
 		return
 	}
 
-	shortID, err := h.service.ShortenURL(originalURL)
+	// Получаем userID из контекста
+	userID := middleware.GetUserID(req.Context(), h.logger)
+
+	shortID, err := h.service.ShortenURL(originalURL, userID)
 	if err != nil {
 		log.Printf("failed to shorten url %q: %v", originalURL, err)
 		res.WriteHeader(http.StatusInternalServerError)
@@ -79,7 +86,10 @@ func (h *URLHandler) CreateShortURL(res http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	shortID, err := h.service.ShortenURL(request.URL)
+	// Получаем userID из контекста
+	userID := middleware.GetUserID(req.Context(), h.logger)
+
+	shortID, err := h.service.ShortenURL(request.URL, userID)
 	if err != nil {
 		log.Printf("failed to shorten url %q: %v", request.URL, err)
 		res.WriteHeader(http.StatusInternalServerError)
@@ -102,7 +112,9 @@ func (h *URLHandler) CreateShortURL(res http.ResponseWriter, req *http.Request) 
 	res.WriteHeader(http.StatusCreated)
 
 	encoder := json.NewEncoder(res)
-	encoder.Encode(response)
+	if err := encoder.Encode(response); err != nil {
+		log.Printf("failed to encode response: %v", err)
+	}
 }
 
 // GetOriginalURL обрабатывает GET запрос для получения оригинального URL
@@ -125,7 +137,48 @@ func (h *URLHandler) GetOriginalURL(res http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-
 	res.Header().Set("Location", originalURL)
 	res.WriteHeader(http.StatusTemporaryRedirect)
+}
+
+// GetUserURLs обрабатывает GET запрос для получения всех URL пользователя
+func (h *URLHandler) GetUserURLs(res http.ResponseWriter, req *http.Request) {
+	// Получаем userID из контекста
+	userID := middleware.GetUserID(req.Context(), h.logger)
+
+	urls, err := h.service.GetUserURLs(userID)
+	if err != nil {
+		log.Printf("failed to get user urls: %v", err)
+		res.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	// Если URL нет, возвращаем 204 No Content
+	if len(urls) == 0 {
+		res.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	// Формируем ответ
+	response := make([]model.UserURLsResponse, 0, len(urls))
+	for _, u := range urls {
+		fullShortURL, err := url.JoinPath(h.baseURL, u.ShortURL)
+		if err != nil {
+			log.Printf("failed to join url path: %v", err)
+			continue
+		}
+
+		response = append(response, model.UserURLsResponse{
+			ShortURL:    fullShortURL,
+			OriginalURL: u.OriginalURL,
+		})
+	}
+
+	res.Header().Set("Content-Type", "application/json")
+	res.WriteHeader(http.StatusOK)
+
+	encoder := json.NewEncoder(res)
+	if err := encoder.Encode(response); err != nil {
+		log.Printf("failed to encode response: %v", err)
+	}
 }
