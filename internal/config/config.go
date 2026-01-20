@@ -20,6 +20,9 @@ type Config struct {
 
 	// Путь к файлу для хранения URL
 	FileStoragePath string `env:"FILE_STORAGE_PATH" envDefault:"/tmp/short-url-db.json"`
+
+	// Строка подключения к базе данных PostgreSQL
+	DatabaseDSN string `env:"DATABASE_DSN"`
 }
 
 var (
@@ -28,6 +31,8 @@ var (
 	flagLogLevel        = flag.String("l", "FATAL", "Уровень логирования")
 	flagFileStoragePath = flag.String("f", "/tmp/short-url-db.json", "Путь к файлу для хранения URL")
 	flagServerPort      = flag.String("server-port", "", "Порт для запуска сервера")
+	flagDatabaseDSN     = flag.String("d", "", "Строка подключения к базе данных")
+	flagDatabaseDSNLong = flag.String("database-dsn", "", "Строка подключения к базе данных")
 )
 
 func NewConfig() (*Config, error) {
@@ -36,11 +41,18 @@ func NewConfig() (*Config, error) {
 		flag.Parse()
 	}
 
+	// Для DatabaseDSN проверяем оба флага (короткий и длинный)
+	databaseDSN := *flagDatabaseDSN
+	if *flagDatabaseDSNLong != "" {
+		databaseDSN = *flagDatabaseDSNLong
+	}
+
 	cfg := &Config{
 		ServerAddress:   *flagServerAddress,
 		BaseURL:         *flagBaseURL,
 		LogLevel:        *flagLogLevel,
 		FileStoragePath: *flagFileStoragePath,
+		DatabaseDSN:     databaseDSN,
 	}
 
 	// Переменные окружения перезаписывают флаги, если они установлены
@@ -55,6 +67,9 @@ func NewConfig() (*Config, error) {
 	}
 	if val, ok := os.LookupEnv("FILE_STORAGE_PATH"); ok {
 		cfg.FileStoragePath = val
+	}
+	if val, ok := os.LookupEnv("DATABASE_DSN"); ok {
+		cfg.DatabaseDSN = val
 	}
 
 	// Обработка SERVER_PORT - если задан, он перезаписывает ServerAddress и BaseURL

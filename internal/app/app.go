@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/mmeow0/meow-shortener/internal/config"
+	"github.com/mmeow0/meow-shortener/internal/database"
 	"github.com/mmeow0/meow-shortener/internal/handler"
 	"github.com/mmeow0/meow-shortener/internal/logger"
 	"github.com/mmeow0/meow-shortener/internal/repository"
@@ -17,6 +18,7 @@ type App struct {
 	cfg    *config.Config
 	router http.Handler
 	repo   *repository.FileURLRepository
+	db     *database.DB
 	logger *zap.Logger
 }
 
@@ -32,6 +34,18 @@ func InitializeApp() (*App, error) {
 		return nil, fmt.Errorf("failed to initialize logger: %w", err)
 	}
 
+	// Инициализируем подключение к базе данных (если DSN указан)
+	var db *database.DB
+	if cfg.DatabaseDSN != "" {
+		db, err = database.NewDB(cfg.DatabaseDSN)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize database: %w", err)
+		}
+		log.Info("Database connection established")
+	} else {
+		log.Info("Database DSN not provided, running without database")
+	}
+
 	// Используем файловое хранилище
 	urlRepo, err := repository.NewFileURLRepository(cfg.FileStoragePath)
 	if err != nil {
@@ -39,12 +53,14 @@ func InitializeApp() (*App, error) {
 	}
 	urlService := service.NewURLService(urlRepo)
 	urlHandler := handler.NewURLHandler(urlService, cfg.BaseURL, log)
-	rt := router.NewRouter(urlHandler, log)
+	pingHandler := handler.NewPingHandler(db, log)
+	rt := router.NewRouter(urlHandler, pingHandler, log)
 
 	return &App{
 		cfg:    cfg,
 		router: rt,
 		repo:   urlRepo,
+		db:     db,
 		logger: log,
 	}, nil
 }
@@ -52,5 +68,8 @@ func InitializeApp() (*App, error) {
 func (a *App) Run() error {
 	a.logger.Info("Running server", zap.String("address", a.cfg.ServerAddress))
 	defer a.repo.Close() // Закрываем файл при завершении работы
+	if a.db != nil {
+		defer a.db.Close() // Закрываем соединение с БД при завершении работы
+	}
 	return http.ListenAndServe(a.cfg.ServerAddress, a.router)
 }

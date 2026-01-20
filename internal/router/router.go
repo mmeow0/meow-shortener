@@ -8,7 +8,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func NewRouter(urlHandler *handler.URLHandler, log *zap.Logger) *chi.Mux {
+func NewRouter(urlHandler *handler.URLHandler, pingHandler *handler.PingHandler, log *zap.Logger) *chi.Mux {
 	r := chi.NewRouter()
 
 	// Подключаем middleware для gzip сжатия
@@ -21,6 +21,7 @@ func NewRouter(urlHandler *handler.URLHandler, log *zap.Logger) *chi.Mux {
 	r.Post("/", urlHandler.CreateShortURLPlain)
 	r.Post("/api/shorten", urlHandler.CreateShortURL)
 	r.Get("/api/user/urls", urlHandler.GetUserURLs)
+	r.Get("/ping", pingHandler.Ping)
 	r.Get("/{id}", urlHandler.GetOriginalURL)
 
 	return r
