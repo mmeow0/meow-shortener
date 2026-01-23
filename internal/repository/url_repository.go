@@ -14,6 +14,15 @@ import (
 var ErrNotFound = errors.New("url not found")
 var ErrAlreadyExists = errors.New("url id already exists")
 
+// URLRepository интерфейс для работы с URL
+type URLRepository interface {
+	Save(url *model.URL) error
+	FindByID(id string) (*model.URL, error)
+	GetAll() ([]*model.URL, error)
+	GetByUserID(userID string) ([]*model.URL, error)
+	Close() error
+}
+
 // InMemoryURLRepository базовая реализация хранилища URL в памяти
 type InMemoryURLRepository struct {
 	mu   sync.RWMutex
@@ -78,6 +87,11 @@ func (r *InMemoryURLRepository) GetByUserID(userID string) ([]*model.URL, error)
 	}
 
 	return urls, nil
+}
+
+// Close для in-memory репозитория ничего не делает
+func (r *InMemoryURLRepository) Close() error {
+	return nil
 }
 
 // FileURLRepository декоратор над InMemoryURLRepository с сохранением в файл
