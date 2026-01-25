@@ -51,6 +51,29 @@ func (h *URLHandler) CreateShortURLPlain(res http.ResponseWriter, req *http.Requ
 
 	shortID, err := h.service.ShortenURL(originalURL, userID)
 	if err != nil {
+		// Проверяем, является ли это конфликтом
+		if errors.Is(err, repository.ErrConflict) {
+			// URL уже существует, находим существующий короткий URL
+			existingURL, findErr := h.service.FindByOriginalURL(originalURL)
+			if findErr != nil {
+				log.Printf("failed to find existing url: %v", findErr)
+				res.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+
+			shortURL, joinErr := url.JoinPath(h.baseURL, existingURL.ShortURL)
+			if joinErr != nil {
+				log.Printf("failed to join url path: %v", joinErr)
+				res.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+
+			res.Header().Set("Content-Type", "text/plain")
+			res.WriteHeader(http.StatusConflict)
+			res.Write([]byte(shortURL))
+			return
+		}
+
 		log.Printf("failed to shorten url %q: %v", originalURL, err)
 		res.WriteHeader(http.StatusInternalServerError)
 		return
@@ -91,6 +114,37 @@ func (h *URLHandler) CreateShortURL(res http.ResponseWriter, req *http.Request) 
 
 	shortID, err := h.service.ShortenURL(request.URL, userID)
 	if err != nil {
+		// Проверяем, является ли это конфликтом
+		if errors.Is(err, repository.ErrConflict) {
+			// URL уже существует, находим существующий короткий URL
+			existingURL, findErr := h.service.FindByOriginalURL(request.URL)
+			if findErr != nil {
+				log.Printf("failed to find existing url: %v", findErr)
+				res.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+
+			shortURL, joinErr := url.JoinPath(h.baseURL, existingURL.ShortURL)
+			if joinErr != nil {
+				log.Printf("failed to join url path: %v", joinErr)
+				res.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+
+			response := model.ShortenResponse{
+				Result: shortURL,
+			}
+
+			res.Header().Set("Content-Type", "application/json")
+			res.WriteHeader(http.StatusConflict)
+
+			encoder := json.NewEncoder(res)
+			if err := encoder.Encode(response); err != nil {
+				log.Printf("failed to encode response: %v", err)
+			}
+			return
+		}
+
 		log.Printf("failed to shorten url %q: %v", request.URL, err)
 		res.WriteHeader(http.StatusInternalServerError)
 		return

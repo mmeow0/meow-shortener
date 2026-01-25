@@ -13,12 +13,14 @@ import (
 
 var ErrNotFound = errors.New("url not found")
 var ErrAlreadyExists = errors.New("url id already exists")
+var ErrConflict = errors.New("url already exists") // Конфликт - URL уже существует с другим short_id
 
 // URLRepository интерфейс для работы с URL
 type URLRepository interface {
 	Save(url *model.URL) error
 	BatchSave(urls []*model.URL) error
 	FindByID(id string) (*model.URL, error)
+	FindByOriginalURL(originalURL string) (*model.URL, error)
 	GetAll() ([]*model.URL, error)
 	GetByUserID(userID string) ([]*model.URL, error)
 	Close() error
@@ -80,6 +82,20 @@ func (r *InMemoryURLRepository) FindByID(id string) (*model.URL, error) {
 	}
 
 	return url, nil
+}
+
+// FindByOriginalURL находит URL по оригинальному URL
+func (r *InMemoryURLRepository) FindByOriginalURL(originalURL string) (*model.URL, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	for _, url := range r.urls {
+		if url.OriginalURL == originalURL {
+			return url, nil
+		}
+	}
+
+	return nil, ErrNotFound
 }
 
 // GetAll возвращает все URL из хранилища

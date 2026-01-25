@@ -16,6 +16,7 @@ type URLRepository interface {
 	Save(url *model.URL) error
 	BatchSave(urls []*model.URL) error
 	FindByID(id string) (*model.URL, error)
+	FindByOriginalURL(originalURL string) (*model.URL, error)
 	GetAll() ([]*model.URL, error)
 	GetByUserID(userID string) ([]*model.URL, error)
 }
@@ -143,6 +144,11 @@ func (s *URLService) GetOriginalURL(shortID string) (string, error) {
 	}
 
 	return url.OriginalURL, nil
+}
+
+// FindByOriginalURL находит URL по оригинальному URL
+func (s *URLService) FindByOriginalURL(originalURL string) (*model.URL, error) {
+	return s.repo.FindByOriginalURL(originalURL)
 }
 
 // GetAllURLs возвращает все сохранённые URL

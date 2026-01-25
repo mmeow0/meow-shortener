@@ -25,11 +25,20 @@ func (r *PostgresURLRepository) Save(url *model.URL) error {
 	query := `
 		INSERT INTO urls (short_id, original_url, user_id, created_at, updated_at)
 		VALUES ($1, $2, $3, NOW(), NOW())
+		ON CONFLICT (original_url) DO NOTHING
+		RETURNING short_id
 	`
 
-	_, err := r.db.Exec(query, url.ShortURL, url.OriginalURL, url.UserID)
+	var returnedShortID string
+	err := r.db.QueryRow(query, url.ShortURL, url.OriginalURL, url.UserID).Scan(&returnedShortID)
+	
 	if err != nil {
-		// Проверяем на дубликат через pq.Error
+		if err == sql.ErrNoRows {
+			// Конфликт: URL уже существует, возвращаем ErrConflict
+			return ErrConflict
+		}
+		
+		// Проверяем на дубликат short_id через pq.Error
 		if pqErr, ok := err.(*pq.Error); ok {
 			// 23505 - код ошибки unique_violation в PostgreSQL
 			// https://github.com/lib/pq/blob/v1.10.9/error.go#L46
@@ -105,6 +114,26 @@ func (r *PostgresURLRepository) FindByID(id string) (*model.URL, error) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("failed to query url: %w", err)
+	}
+
+	return url, nil
+}
+
+// FindByOriginalURL находит URL по оригинальному URL
+func (r *PostgresURLRepository) FindByOriginalURL(originalURL string) (*model.URL, error) {
+	query := `
+		SELECT short_id, original_url, user_id
+		FROM urls
+		WHERE original_url = $1
+	`
+
+	url := &model.URL{}
+	err := r.db.QueryRow(query, originalURL).Scan(&url.ShortURL, &url.OriginalURL, &url.UserID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to query url by original: %w", err)
 	}
 
 	return url, nil
