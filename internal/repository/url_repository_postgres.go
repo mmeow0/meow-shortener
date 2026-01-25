@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/lib/pq"
 	"github.com/mmeow0/meow-shortener/internal/model"
 )
 
@@ -28,11 +29,62 @@ func (r *PostgresURLRepository) Save(url *model.URL) error {
 
 	_, err := r.db.Exec(query, url.ShortURL, url.OriginalURL, url.UserID)
 	if err != nil {
-		// Проверяем на дубликат
-		if err.Error() == "pq: duplicate key value violates unique constraint \"urls_short_id_key\"" {
-			return fmt.Errorf("%w: %s", ErrAlreadyExists, url.ShortURL)
+		// Проверяем на дубликат через pq.Error
+		if pqErr, ok := err.(*pq.Error); ok {
+			// 23505 - код ошибки unique_violation в PostgreSQL
+			// https://github.com/lib/pq/blob/v1.10.9/error.go#L46
+			if pqErr.Code == "23505" {
+				return fmt.Errorf("%w: %s", ErrAlreadyExists, url.ShortURL)
+			}
 		}
 		return fmt.Errorf("failed to insert url: %w", err)
+	}
+
+	return nil
+}
+
+// BatchSave сохраняет несколько URL в базу данных в рамках одной транзакции
+func (r *PostgresURLRepository) BatchSave(urls []*model.URL) error {
+	if len(urls) == 0 {
+		return nil
+	}
+
+	// Начинаем транзакцию
+	tx, err := r.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Подготавливаем statement для вставки
+	stmt, err := tx.Prepare(`
+		INSERT INTO urls (short_id, original_url, user_id, created_at, updated_at)
+		VALUES ($1, $2, $3, NOW(), NOW())
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare statement: %w", err)
+	}
+	defer stmt.Close()
+
+	// Вставляем все URL
+	for _, url := range urls {
+		_, err := stmt.Exec(url.ShortURL, url.OriginalURL, url.UserID)
+		if err != nil {
+			// Проверяем на дубликат через pq.Error
+			if pqErr, ok := err.(*pq.Error); ok {
+				// 23505 - код ошибки unique_violation в PostgreSQL
+				// https://github.com/lib/pq/blob/v1.10.9/error.go#L46
+				if pqErr.Code == "23505" {
+					return fmt.Errorf("%w: %s", ErrAlreadyExists, url.ShortURL)
+				}
+			}
+			return fmt.Errorf("failed to insert url: %w", err)
+		}
+	}
+
+	// Коммитим транзакцию
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	return nil

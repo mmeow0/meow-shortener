@@ -14,6 +14,7 @@ import (
 
 type URLRepository interface {
 	Save(url *model.URL) error
+	BatchSave(urls []*model.URL) error
 	FindByID(id string) (*model.URL, error)
 	GetAll() ([]*model.URL, error)
 	GetByUserID(userID string) ([]*model.URL, error)
@@ -62,6 +63,76 @@ func (s *URLService) ShortenURL(originalURL, userID string) (string, error) {
 	}
 
 	return "", fmt.Errorf("failed to obtain unique id after %d attempts", maxAttempts)
+}
+
+// BatchShortenURL создаёт несколько коротких URL за одну операцию
+func (s *URLService) BatchShortenURL(items []struct {
+	CorrelationID string
+	OriginalURL   string
+}, userID string) ([]struct {
+	CorrelationID string
+	ShortURL      string
+}, error) {
+	const maxAttempts = 5
+
+	urls := make([]*model.URL, 0, len(items))
+	results := make([]struct {
+		CorrelationID string
+		ShortURL      string
+	}, 0, len(items))
+
+	// Генерируем короткие ID для всех URL
+	for _, item := range items {
+		var shortID string
+		var generated bool
+
+		// Пытаемся сгенерировать уникальный ID
+		for range maxAttempts {
+			shortID = s.generateShortID()
+			
+			// Проверяем, что ID уникален в текущем батче
+			duplicate := false
+			for _, u := range urls {
+				if u.ShortURL == shortID {
+					duplicate = true
+					break
+				}
+			}
+			
+			if !duplicate {
+				generated = true
+				break
+			}
+		}
+
+		if !generated {
+			return nil, fmt.Errorf("failed to generate unique id for correlation_id: %s", item.CorrelationID)
+		}
+
+		uuid := s.generateUUID()
+		url := &model.URL{
+			UUID:        uuid,
+			ShortURL:    shortID,
+			OriginalURL: item.OriginalURL,
+			UserID:      userID,
+		}
+
+		urls = append(urls, url)
+		results = append(results, struct {
+			CorrelationID string
+			ShortURL      string
+		}{
+			CorrelationID: item.CorrelationID,
+			ShortURL:      shortID,
+		})
+	}
+
+	// Сохраняем все URL одной операцией
+	if err := s.repo.BatchSave(urls); err != nil {
+		return nil, fmt.Errorf("failed to save batch: %w", err)
+	}
+
+	return results, nil
 }
 
 // GetOriginalURL возвращает оригинальный URL по короткому идентификатору

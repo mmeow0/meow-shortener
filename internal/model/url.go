@@ -23,3 +23,15 @@ type UserURLsResponse struct {
 	ShortURL    string `json:"short_url"`
 	OriginalURL string `json:"original_url"`
 }
+
+// BatchShortenRequest представляет элемент батч-запроса для сокращения URL
+type BatchShortenRequest struct {
+	CorrelationID string `json:"correlation_id"` // Идентификатор для связи запроса и ответа
+	OriginalURL   string `json:"original_url"`   // URL для сокращения
+}
+
+// BatchShortenResponse представляет элемент батч-ответа с сокращённым URL
+type BatchShortenResponse struct {
+	CorrelationID string `json:"correlation_id"` // Идентификатор из запроса
+	ShortURL      string `json:"short_url"`      // Результирующий сокращённый URL
+}

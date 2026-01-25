@@ -20,6 +20,7 @@ func NewRouter(urlHandler *handler.URLHandler, pingHandler *handler.PingHandler,
 
 	r.Post("/", urlHandler.CreateShortURLPlain)
 	r.Post("/api/shorten", urlHandler.CreateShortURL)
+	r.Post("/api/shorten/batch", urlHandler.CreateShortURLBatch)
 	r.Get("/api/user/urls", urlHandler.GetUserURLs)
 	r.Get("/ping", pingHandler.Ping)
 	r.Get("/{id}", urlHandler.GetOriginalURL)

@@ -182,3 +182,78 @@ func (h *URLHandler) GetUserURLs(res http.ResponseWriter, req *http.Request) {
 		log.Printf("failed to encode response: %v", err)
 	}
 }
+
+// CreateShortURLBatch обрабатывает POST запрос для пакетного создания коротких URL
+func (h *URLHandler) CreateShortURLBatch(res http.ResponseWriter, req *http.Request) {
+	var batchRequest []model.BatchShortenRequest
+
+	decoder := json.NewDecoder(req.Body)
+	if err := decoder.Decode(&batchRequest); err != nil {
+		res.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	defer req.Body.Close()
+
+	// Проверяем, что батч не пустой
+	if len(batchRequest) == 0 {
+		res.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	// Проверяем валидность всех URL
+	for _, item := range batchRequest {
+		if strings.TrimSpace(item.OriginalURL) == "" {
+			res.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(item.CorrelationID) == "" {
+			res.WriteHeader(http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Получаем userID из контекста
+	userID := middleware.GetUserID(req.Context(), h.logger)
+
+	// Подготавливаем данные для сервиса
+	items := make([]struct {
+		CorrelationID string
+		OriginalURL   string
+	}, len(batchRequest))
+
+	for i, item := range batchRequest {
+		items[i].CorrelationID = item.CorrelationID
+		items[i].OriginalURL = item.OriginalURL
+	}
+
+	// Создаём короткие URL
+	results, err := h.service.BatchShortenURL(items, userID)
+	if err != nil {
+		log.Printf("failed to batch shorten urls: %v", err)
+		res.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	// Формируем ответ
+	response := make([]model.BatchShortenResponse, 0, len(results))
+	for _, result := range results {
+		fullShortURL, err := url.JoinPath(h.baseURL, result.ShortURL)
+		if err != nil {
+			log.Printf("failed to join url path: %v", err)
+			continue
+		}
+
+		response = append(response, model.BatchShortenResponse{
+			CorrelationID: result.CorrelationID,
+			ShortURL:      fullShortURL,
+		})
+	}
+
+	res.Header().Set("Content-Type", "application/json")
+	res.WriteHeader(http.StatusCreated)
+
+	encoder := json.NewEncoder(res)
+	if err := encoder.Encode(response); err != nil {
+		log.Printf("failed to encode response: %v", err)
+	}
+}

@@ -17,6 +17,7 @@ var ErrAlreadyExists = errors.New("url id already exists")
 // URLRepository интерфейс для работы с URL
 type URLRepository interface {
 	Save(url *model.URL) error
+	BatchSave(urls []*model.URL) error
 	FindByID(id string) (*model.URL, error)
 	GetAll() ([]*model.URL, error)
 	GetByUserID(userID string) ([]*model.URL, error)
@@ -45,6 +46,26 @@ func (r *InMemoryURLRepository) Save(url *model.URL) error {
 	}
 
 	r.urls[url.ShortURL] = url
+	return nil
+}
+
+// BatchSave сохраняет несколько URL за одну операцию
+func (r *InMemoryURLRepository) BatchSave(urls []*model.URL) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Проверяем на дубликаты
+	for _, url := range urls {
+		if _, exists := r.urls[url.ShortURL]; exists {
+			return fmt.Errorf("%w: %s", ErrAlreadyExists, url.ShortURL)
+		}
+	}
+
+	// Сохраняем все URL
+	for _, url := range urls {
+		r.urls[url.ShortURL] = url
+	}
+
 	return nil
 }
 
@@ -169,6 +190,32 @@ func (r *FileURLRepository) Save(url *model.URL) error {
 		delete(r.InMemoryURLRepository.urls, url.ShortURL)
 		r.InMemoryURLRepository.mu.Unlock()
 		return fmt.Errorf("failed to write to file: %w", err)
+	}
+
+	return nil
+}
+
+// BatchSave переопределяет метод BatchSave, добавляя запись в файл
+func (r *FileURLRepository) BatchSave(urls []*model.URL) error {
+	// Сначала сохраняем в памяти
+	if err := r.InMemoryURLRepository.BatchSave(urls); err != nil {
+		return err
+	}
+
+	// Затем записываем все URL в файл
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for _, url := range urls {
+		if err := r.encoder.Encode(url); err != nil {
+			// При ошибке откатываем все изменения в памяти
+			r.InMemoryURLRepository.mu.Lock()
+			for _, u := range urls {
+				delete(r.InMemoryURLRepository.urls, u.ShortURL)
+			}
+			r.InMemoryURLRepository.mu.Unlock()
+			return fmt.Errorf("failed to write to file: %w", err)
+		}
 	}
 
 	return nil
