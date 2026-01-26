@@ -19,6 +19,7 @@ type URLRepository interface {
 	FindByOriginalURL(originalURL string) (*model.URL, error)
 	GetAll() ([]*model.URL, error)
 	GetByUserID(userID string) ([]*model.URL, error)
+	Close() error
 }
 
 // URLService содержит бизнес-логику работы с URL

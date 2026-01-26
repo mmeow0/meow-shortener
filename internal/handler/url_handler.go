@@ -31,6 +31,38 @@ func NewURLHandler(service *service.URLService, baseURL string, logger *zap.Logg
 	}
 }
 
+// shortenURL создаёт короткий URL с обработкой конфликтов
+// Возвращает: полный короткий URL, HTTP статус код (201 или 409), ошибку
+func (h *URLHandler) shortenURL(originalURL, userID string) (string, int, error) {
+	shortID, err := h.service.ShortenURL(originalURL, userID)
+	if err != nil {
+		// Проверяем, является ли это конфликтом
+		if errors.Is(err, repository.ErrConflict) {
+			// URL уже существует, находим существующий короткий URL
+			existingURL, findErr := h.service.FindByOriginalURL(originalURL)
+			if findErr != nil {
+				return "", 0, findErr
+			}
+
+			shortURL, joinErr := url.JoinPath(h.baseURL, existingURL.ShortURL)
+			if joinErr != nil {
+				return "", 0, joinErr
+			}
+
+			return shortURL, http.StatusConflict, nil
+		}
+		return "", 0, err
+	}
+
+	// Успешно создан новый URL
+	shortURL, err := url.JoinPath(h.baseURL, shortID)
+	if err != nil {
+		return "", 0, err
+	}
+
+	return shortURL, http.StatusCreated, nil
+}
+
 // CreateShortURLPlain обрабатывает POST запрос для создания короткого URL (text/plain формат)
 func (h *URLHandler) CreateShortURLPlain(res http.ResponseWriter, req *http.Request) {
 	body, err := io.ReadAll(req.Body)
@@ -49,46 +81,16 @@ func (h *URLHandler) CreateShortURLPlain(res http.ResponseWriter, req *http.Requ
 	// Получаем userID из контекста
 	userID := middleware.GetUserID(req.Context(), h.logger)
 
-	shortID, err := h.service.ShortenURL(originalURL, userID)
+	// Создаём короткий URL с обработкой конфликтов
+	shortURL, statusCode, err := h.shortenURL(originalURL, userID)
 	if err != nil {
-		// Проверяем, является ли это конфликтом
-		if errors.Is(err, repository.ErrConflict) {
-			// URL уже существует, находим существующий короткий URL
-			existingURL, findErr := h.service.FindByOriginalURL(originalURL)
-			if findErr != nil {
-				log.Printf("failed to find existing url: %v", findErr)
-				res.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-
-			shortURL, joinErr := url.JoinPath(h.baseURL, existingURL.ShortURL)
-			if joinErr != nil {
-				log.Printf("failed to join url path: %v", joinErr)
-				res.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-
-			res.Header().Set("Content-Type", "text/plain")
-			res.WriteHeader(http.StatusConflict)
-			res.Write([]byte(shortURL))
-			return
-		}
-
 		log.Printf("failed to shorten url %q: %v", originalURL, err)
 		res.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	shortURL, err := url.JoinPath(h.baseURL, shortID)
-
-	if err != nil {
-		log.Printf("failed to join url path: %v", err)
-		res.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
 	res.Header().Set("Content-Type", "text/plain")
-	res.WriteHeader(http.StatusCreated)
+	res.WriteHeader(statusCode)
 	res.Write([]byte(shortURL))
 }
 
@@ -112,48 +114,10 @@ func (h *URLHandler) CreateShortURL(res http.ResponseWriter, req *http.Request) 
 	// Получаем userID из контекста
 	userID := middleware.GetUserID(req.Context(), h.logger)
 
-	shortID, err := h.service.ShortenURL(request.URL, userID)
+	// Создаём короткий URL с обработкой конфликтов
+	shortURL, statusCode, err := h.shortenURL(request.URL, userID)
 	if err != nil {
-		// Проверяем, является ли это конфликтом
-		if errors.Is(err, repository.ErrConflict) {
-			// URL уже существует, находим существующий короткий URL
-			existingURL, findErr := h.service.FindByOriginalURL(request.URL)
-			if findErr != nil {
-				log.Printf("failed to find existing url: %v", findErr)
-				res.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-
-			shortURL, joinErr := url.JoinPath(h.baseURL, existingURL.ShortURL)
-			if joinErr != nil {
-				log.Printf("failed to join url path: %v", joinErr)
-				res.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-
-			response := model.ShortenResponse{
-				Result: shortURL,
-			}
-
-			res.Header().Set("Content-Type", "application/json")
-			res.WriteHeader(http.StatusConflict)
-
-			encoder := json.NewEncoder(res)
-			if err := encoder.Encode(response); err != nil {
-				log.Printf("failed to encode response: %v", err)
-			}
-			return
-		}
-
 		log.Printf("failed to shorten url %q: %v", request.URL, err)
-		res.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	shortURL, err := url.JoinPath(h.baseURL, shortID)
-
-	if err != nil {
-		log.Printf("failed to join url path: %v", err)
 		res.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -163,7 +127,7 @@ func (h *URLHandler) CreateShortURL(res http.ResponseWriter, req *http.Request) 
 	}
 
 	res.Header().Set("Content-Type", "application/json")
-	res.WriteHeader(http.StatusCreated)
+	res.WriteHeader(statusCode)
 
 	encoder := json.NewEncoder(res)
 	if err := encoder.Encode(response); err != nil {

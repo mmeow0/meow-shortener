@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 
 	"github.com/mmeow0/meow-shortener/internal/config"
 	"github.com/mmeow0/meow-shortener/internal/database"
@@ -17,7 +18,7 @@ import (
 type App struct {
 	cfg    *config.Config
 	router http.Handler
-	repo   repository.URLRepository
+	repo   service.URLRepository
 	db     *database.DB
 	logger *zap.Logger
 }
@@ -36,7 +37,7 @@ func InitializeApp() (*App, error) {
 
 	// Инициализируем подключение к базе данных (если DSN указан)
 	var db *database.DB
-	var urlRepo repository.URLRepository
+	var urlRepo service.URLRepository
 
 	// Приоритет хранилищ: БД > Файл > Память
 	if cfg.DatabaseDSN != "" {
@@ -83,25 +84,39 @@ func InitializeApp() (*App, error) {
 
 // maskDSN маскирует пароль в строке подключения для безопасного логирования
 func maskDSN(dsn string) string {
-	// показываем только схему и хост
-	if len(dsn) > 20 {
-		return dsn[:20] + "..."
+	// Парсим DSN как URL
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return "***" // Если не удалось распарсить, скрываем всё
 	}
-	return "***"
+
+	// Маскируем пароль
+	if u.User != nil {
+		username := u.User.Username()
+		u.User = url.UserPassword(username, "***")
+	}
+
+	return u.String()
 }
 
 func (a *App) Run() error {
-	a.logger.Info("Running server", zap.String("address", a.cfg.ServerAddress))
-	
-	// Закрываем ресурсы при завершении работы
-	defer func() {
-		if a.repo != nil {
-			a.repo.Close()
-		}
-		if a.db != nil {
-			a.db.Close()
-		}
-	}()
-	
+	a.logger.Info("Starting server", zap.String("address", a.cfg.ServerAddress))
 	return http.ListenAndServe(a.cfg.ServerAddress, a.router)
+}
+
+// Close закрывает все ресурсы приложения
+func (a *App) Close() error {
+	if a.repo != nil {
+		if err := a.repo.Close(); err != nil {
+			a.logger.Error("Failed to close repository", zap.Error(err))
+		}
+	}
+
+	if a.db != nil {
+		if err := a.db.Close(); err != nil {
+			a.logger.Error("Failed to close database", zap.Error(err))
+		}
+	}
+
+	return nil
 }
