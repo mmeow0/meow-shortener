@@ -4,10 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
-	"strconv"
-	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mmeow0/meow-shortener/internal/model"
 	"github.com/mmeow0/meow-shortener/internal/repository"
 )
@@ -33,7 +32,6 @@ type deleteTask struct {
 type URLService struct {
 	repo       URLRepository
 	rand       *rand.Rand
-	counter    uint64 // атомарный счётчик для UUID
 	deleteChan chan deleteTask
 	batchSize  int           // размер батча для удаления
 	batchTime  time.Duration // время ожидания накопления батча
@@ -43,7 +41,6 @@ func NewURLService(repo URLRepository) *URLService {
 	s := &URLService{
 		repo:       repo,
 		rand:       rand.New(rand.NewSource(time.Now().UnixNano())),
-		counter:    0,
 		deleteChan: make(chan deleteTask, 100),
 		batchSize:  100,                    // обрабатываем до 100 URL за раз
 		batchTime:  10 * time.Millisecond,  // или каждые 10ms
@@ -260,8 +257,7 @@ func (s *URLService) flushUserBatch(userID string, shortIDs []string) {
 	s.repo.DeleteByIDs(shortIDs, userID)
 }
 
-// generateUUID генерирует простой UUID на основе счётчика
+// generateUUID генерирует UUID v4
 func (s *URLService) generateUUID() string {
-	id := atomic.AddUint64(&s.counter, 1)
-	return strconv.FormatUint(id, 10)
+	return uuid.New().String()
 }
