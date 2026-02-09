@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -19,22 +20,39 @@ type URLRepository interface {
 	FindByOriginalURL(originalURL string) (*model.URL, error)
 	GetAll() ([]*model.URL, error)
 	GetByUserID(userID string) ([]*model.URL, error)
+	DeleteByIDs(shortIDs []string, userID string) error
 	Close() error
+}
+
+// deleteTask представляет задачу на удаление URL
+type deleteTask struct {
+	shortIDs []string
+	userID   string
 }
 
 // URLService содержит бизнес-логику работы с URL
 type URLService struct {
-	repo    URLRepository
-	rand    *rand.Rand
-	counter uint64 // атомарный счётчик для UUID
+	repo        URLRepository
+	rand        *rand.Rand
+	counter     uint64 // атомарный счётчик для UUID
+	deleteChan  chan deleteTask
+	deleteQueue []deleteTask
+	mu          sync.Mutex
 }
 
 func NewURLService(repo URLRepository) *URLService {
-	return &URLService{
-		repo:    repo,
-		rand:    rand.New(rand.NewSource(time.Now().UnixNano())),
-		counter: 0,
+	s := &URLService{
+		repo:        repo,
+		rand:        rand.New(rand.NewSource(time.Now().UnixNano())),
+		counter:     0,
+		deleteChan:  make(chan deleteTask, 100),
+		deleteQueue: make([]deleteTask, 0),
 	}
+	
+	// Запускаем горутину для обработки удалений
+	go s.processDeletes()
+	
+	return s
 }
 
 // ShortenURL создаёт короткий URL из оригинального
@@ -172,6 +190,63 @@ func (s *URLService) generateShortID() string {
 		b[i] = charset[s.rand.Intn(len(charset))]
 	}
 	return string(b)
+}
+
+// DeleteUserURLs добавляет задачу на удаление URL пользователя по списку коротких ID
+func (s *URLService) DeleteUserURLs(shortIDs []string, userID string) error {
+	if len(shortIDs) == 0 {
+		return nil
+	}
+
+	task := deleteTask{
+		shortIDs: shortIDs,
+		userID:   userID,
+	}
+	
+	select {
+	case s.deleteChan <- task:
+		// Успешно добавлено в канал
+	default:
+		// Канал заполнен, добавляем в очередь
+		s.mu.Lock()
+		s.deleteQueue = append(s.deleteQueue, task)
+		s.mu.Unlock()
+	}
+	
+	return nil
+}
+
+// processDeletes обрабатывает задачи на удаление из канала
+func (s *URLService) processDeletes() {
+	for {
+		task := <-s.deleteChan
+		
+		// Обрабатываем задачу немедленно
+		s.repo.DeleteByIDs(task.shortIDs, task.userID)
+		
+		// Проверяем, есть ли задачи в очереди
+		s.mu.Lock()
+		if len(s.deleteQueue) > 0 {
+			// Пытаемся отправить задачи из очереди в канал
+			processed := 0
+			for i, queuedTask := range s.deleteQueue {
+				select {
+				case s.deleteChan <- queuedTask:
+					// Успешно добавлено в канал
+					processed = i + 1
+				default:
+					// Канал заполнен, остальные задачи остаются в очереди
+					goto queueCleanup
+				}
+			}
+		queueCleanup:
+			// Удаляем обработанные задачи из очереди
+			if processed > 0 {
+				s.deleteQueue = s.deleteQueue[processed:]
+			}
+		}
+		s.mu.Unlock()
+	}
 }
 
 // generateUUID генерирует простой UUID на основе счётчика

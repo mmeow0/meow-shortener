@@ -14,6 +14,7 @@ import (
 var ErrNotFound = errors.New("url not found")
 var ErrAlreadyExists = errors.New("url id already exists")
 var ErrConflict = errors.New("url already exists") // Конфликт - URL уже существует с другим short_id
+var ErrDeleted = errors.New("url has been deleted") // URL был удалён (410 Gone)
 
 // InMemoryURLRepository базовая реализация хранилища URL в памяти
 type InMemoryURLRepository struct {
@@ -69,6 +70,10 @@ func (r *InMemoryURLRepository) FindByID(id string) (*model.URL, error) {
 	if !exists {
 		return nil, ErrNotFound
 	}
+	
+	if url.IsDeleted {
+		return nil, ErrDeleted
+	}
 
 	return url, nil
 }
@@ -100,19 +105,33 @@ func (r *InMemoryURLRepository) GetAll() ([]*model.URL, error) {
 	return urls, nil
 }
 
-// GetByUserID возвращает все URL конкретного пользователя
+// GetByUserID возвращает все URL конкретного пользователя (исключая удалённые)
 func (r *InMemoryURLRepository) GetByUserID(userID string) ([]*model.URL, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	urls := make([]*model.URL, 0)
 	for _, url := range r.urls {
-		if url.UserID == userID {
+		if url.UserID == userID && !url.IsDeleted {
 			urls = append(urls, url)
 		}
 	}
 
 	return urls, nil
+}
+
+// DeleteByIDs помечает URL как удалённые по списку коротких ID для конкретного пользователя
+func (r *InMemoryURLRepository) DeleteByIDs(shortIDs []string, userID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for _, shortID := range shortIDs {
+		if url, exists := r.urls[shortID]; exists && url.UserID == userID {
+			url.IsDeleted = true
+		}
+	}
+
+	return nil
 }
 
 // Close для in-memory репозитория ничего не делает
@@ -222,6 +241,44 @@ func (r *FileURLRepository) BatchSave(urls []*model.URL) error {
 			return fmt.Errorf("failed to write to file: %w", err)
 		}
 	}
+
+	return nil
+}
+
+// DeleteByIDs переопределяет метод DeleteByIDs, перезаписывая файл после мягкого удаления
+func (r *FileURLRepository) DeleteByIDs(shortIDs []string, userID string) error {
+	// Помечаем как удалённые в памяти (мягкое удаление)
+	if err := r.InMemoryURLRepository.DeleteByIDs(shortIDs, userID); err != nil {
+		return err
+	}
+
+	// Перезаписываем файл с актуальными данными (включая is_deleted флаги)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Закрываем текущий файл
+	if r.file != nil {
+		r.file.Close()
+	}
+
+	// Открываем файл для перезаписи
+	file, err := os.OpenFile(r.filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open file for rewrite: %w", err)
+	}
+
+	r.file = file
+	r.encoder = json.NewEncoder(file)
+
+	// Записываем все URL (включая помеченные как удалённые)
+	r.InMemoryURLRepository.mu.RLock()
+	for _, url := range r.InMemoryURLRepository.urls {
+		if err := r.encoder.Encode(url); err != nil {
+			r.InMemoryURLRepository.mu.RUnlock()
+			return fmt.Errorf("failed to write to file: %w", err)
+		}
+	}
+	r.InMemoryURLRepository.mu.RUnlock()
 
 	return nil
 }

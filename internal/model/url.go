@@ -6,6 +6,7 @@ type URL struct {
 	ShortURL    string `json:"short_url"`    // Короткий идентификатор
 	OriginalURL string `json:"original_url"` // Оригинальный URL
 	UserID      string `json:"user_id"`      // ID пользователя, создавшего URL
+	IsDeleted   bool   `json:"is_deleted"`   // Флаг удаления (soft delete)
 }
 
 // ShortenRequest представляет JSON запрос для сокращения URL
@@ -35,3 +36,6 @@ type BatchShortenResponse struct {
 	CorrelationID string `json:"correlation_id"` // Идентификатор из запроса
 	ShortURL      string `json:"short_url"`      // Результирующий сокращённый URL
 }
+
+// DeleteURLsRequest представляет запрос на удаление URL (массив коротких ID)
+type DeleteURLsRequest []string
