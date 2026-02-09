@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math/rand"
 	"strconv"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -32,24 +31,25 @@ type deleteTask struct {
 
 // URLService содержит бизнес-логику работы с URL
 type URLService struct {
-	repo        URLRepository
-	rand        *rand.Rand
-	counter     uint64 // атомарный счётчик для UUID
-	deleteChan  chan deleteTask
-	deleteQueue []deleteTask
-	mu          sync.Mutex
+	repo       URLRepository
+	rand       *rand.Rand
+	counter    uint64 // атомарный счётчик для UUID
+	deleteChan chan deleteTask
+	batchSize  int           // размер батча для удаления
+	batchTime  time.Duration // время ожидания накопления батча
 }
 
 func NewURLService(repo URLRepository) *URLService {
 	s := &URLService{
-		repo:        repo,
-		rand:        rand.New(rand.NewSource(time.Now().UnixNano())),
-		counter:     0,
-		deleteChan:  make(chan deleteTask, 100),
-		deleteQueue: make([]deleteTask, 0),
+		repo:       repo,
+		rand:       rand.New(rand.NewSource(time.Now().UnixNano())),
+		counter:    0,
+		deleteChan: make(chan deleteTask, 100),
+		batchSize:  100,                    // обрабатываем до 100 URL за раз
+		batchTime:  10 * time.Millisecond,  // или каждые 10ms
 	}
 	
-	// Запускаем горутину для обработки удалений
+	// Запускаем горутину для обработки удалений с батчингом
 	go s.processDeletes()
 	
 	return s
@@ -203,50 +203,61 @@ func (s *URLService) DeleteUserURLs(shortIDs []string, userID string) error {
 		userID:   userID,
 	}
 	
+	// Неблокирующая отправка в канал (fan-in pattern)
 	select {
 	case s.deleteChan <- task:
-		// Успешно добавлено в канал
+		// Успешно добавлено в канал для обработки
 	default:
-		// Канал заполнен, добавляем в очередь
-		s.mu.Lock()
-		s.deleteQueue = append(s.deleteQueue, task)
-		s.mu.Unlock()
+		// Канал переполнен - запускаем отдельную горутину
+		go func() {
+			s.deleteChan <- task
+		}()
 	}
 	
 	return nil
 }
 
-// processDeletes обрабатывает задачи на удаление из канала
+// processDeletes обрабатывает задачи на удаление с батчингом (fan-in pattern)
 func (s *URLService) processDeletes() {
+	ticker := time.NewTicker(s.batchTime)
+	defer ticker.Stop()
+	
+	// Буфер для накопления задач по пользователям
+	userBatches := make(map[string][]string)
+	
 	for {
-		task := <-s.deleteChan
-		
-		// Обрабатываем задачу немедленно
-		s.repo.DeleteByIDs(task.shortIDs, task.userID)
-		
-		// Проверяем, есть ли задачи в очереди
-		s.mu.Lock()
-		if len(s.deleteQueue) > 0 {
-			// Пытаемся отправить задачи из очереди в канал
-			processed := 0
-			for i, queuedTask := range s.deleteQueue {
-				select {
-				case s.deleteChan <- queuedTask:
-					// Успешно добавлено в канал
-					processed = i + 1
-				default:
-					// Канал заполнен, остальные задачи остаются в очереди
-					goto queueCleanup
+		select {
+		case task := <-s.deleteChan:
+			// Добавляем URL в батч для этого пользователя
+			userBatches[task.userID] = append(userBatches[task.userID], task.shortIDs...)
+			
+			// Если батч достиг максимального размера - обрабатываем немедленно
+			if len(userBatches[task.userID]) >= s.batchSize {
+				s.flushUserBatch(task.userID, userBatches[task.userID])
+				delete(userBatches, task.userID)
+			}
+			
+		case <-ticker.C:
+			// По таймеру обрабатываем все накопленные батчи
+			for userID, shortIDs := range userBatches {
+				if len(shortIDs) > 0 {
+					s.flushUserBatch(userID, shortIDs)
 				}
 			}
-		queueCleanup:
-			// Удаляем обработанные задачи из очереди
-			if processed > 0 {
-				s.deleteQueue = s.deleteQueue[processed:]
-			}
+			// Очищаем карту
+			userBatches = make(map[string][]string)
 		}
-		s.mu.Unlock()
 	}
+}
+
+// flushUserBatch выполняет batch update для пользователя
+func (s *URLService) flushUserBatch(userID string, shortIDs []string) {
+	if len(shortIDs) == 0 {
+		return
+	}
+	
+	// Выполняем batch update в БД
+	s.repo.DeleteByIDs(shortIDs, userID)
 }
 
 // generateUUID генерирует простой UUID на основе счётчика
