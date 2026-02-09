@@ -71,7 +71,7 @@ func InitializeApp() (*App, error) {
 	urlService := service.NewURLService(urlRepo)
 	urlHandler := handler.NewURLHandler(urlService, cfg.BaseURL, log)
 	pingHandler := handler.NewPingHandler(db, log)
-	rt := router.NewRouter(urlHandler, pingHandler, log)
+	rt := router.NewRouter(urlHandler, pingHandler, cfg.SecretKey, log)
 
 	return &App{
 		cfg:    cfg,

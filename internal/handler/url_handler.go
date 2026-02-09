@@ -146,11 +146,16 @@ func (h *URLHandler) GetOriginalURL(res http.ResponseWriter, req *http.Request) 
 
 	originalURL, err := h.service.GetOriginalURL(shortID)
 	if err != nil {
+		if errors.Is(err, repository.ErrDeleted) {
+			// URL был удалён - возвращаем 410 Gone
+			res.WriteHeader(http.StatusGone)
+			return
+		}
 		if errors.Is(err, repository.ErrNotFound) {
 			res.WriteHeader(http.StatusNotFound)
 			return
 		}
-		log.Printf("failed to get original url for id %q: %v", shortID, err)
+		h.logger.Error("failed to get original url", zap.String("shortID", shortID), zap.Error(err))
 		res.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -161,8 +166,18 @@ func (h *URLHandler) GetOriginalURL(res http.ResponseWriter, req *http.Request) 
 
 // GetUserURLs обрабатывает GET запрос для получения всех URL пользователя
 func (h *URLHandler) GetUserURLs(res http.ResponseWriter, req *http.Request) {
+	// Проверяем валидность cookie
+	if !middleware.IsValidCookie(req.Context()) {
+		res.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
 	// Получаем userID из контекста
 	userID := middleware.GetUserID(req.Context(), h.logger)
+	if userID == "" {
+		res.WriteHeader(http.StatusUnauthorized)
+		return
+	}
 
 	urls, err := h.service.GetUserURLs(userID)
 	if err != nil {
@@ -199,6 +214,64 @@ func (h *URLHandler) GetUserURLs(res http.ResponseWriter, req *http.Request) {
 	if err := encoder.Encode(response); err != nil {
 		log.Printf("failed to encode response: %v", err)
 	}
+}
+
+// DeleteUserURLs обрабатывает DELETE запрос для удаления URL пользователя
+func (h *URLHandler) DeleteUserURLs(res http.ResponseWriter, req *http.Request) {
+	// Проверяем валидность cookie
+	if !middleware.IsValidCookie(req.Context()) {
+		res.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	// Получаем userID из контекста
+	userID := middleware.GetUserID(req.Context(), h.logger)
+	if userID == "" {
+		res.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	// Декодируем запрос
+	var shortIDs model.DeleteURLsRequest
+	decoder := json.NewDecoder(req.Body)
+	if err := decoder.Decode(&shortIDs); err != nil {
+		res.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	defer req.Body.Close()
+
+	// Проверяем, что список не пустой
+	if len(shortIDs) == 0 {
+		res.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	// Извлекаем короткие ID из URL (если были переданы полные URL)
+	cleanedIDs := make([]string, 0, len(shortIDs))
+	for _, id := range shortIDs {
+		// Если это полный URL, извлекаем только короткий ID
+		if strings.HasPrefix(id, "http://") || strings.HasPrefix(id, "https://") {
+			parsedURL, err := url.Parse(id)
+			if err == nil && parsedURL.Path != "" {
+				// Убираем ведущий слэш
+				shortID := strings.TrimPrefix(parsedURL.Path, "/")
+				if shortID != "" {
+					cleanedIDs = append(cleanedIDs, shortID)
+				}
+			}
+		} else {
+			// Это уже короткий ID
+			cleanedIDs = append(cleanedIDs, id)
+		}
+	}
+
+	if err := h.service.DeleteUserURLs(cleanedIDs, userID); err != nil {
+		h.logger.Error("failed to queue delete task", zap.Error(err))
+		res.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	res.WriteHeader(http.StatusAccepted)
 }
 
 // CreateShortURLBatch обрабатывает POST запрос для пакетного создания коротких URL

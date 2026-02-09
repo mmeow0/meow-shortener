@@ -102,18 +102,23 @@ func (r *PostgresURLRepository) BatchSave(urls []*model.URL) error {
 // FindByID находит URL по короткому идентификатору
 func (r *PostgresURLRepository) FindByID(id string) (*model.URL, error) {
 	query := `
-		SELECT short_id, original_url, user_id
+		SELECT short_id, original_url, user_id, COALESCE(is_deleted, FALSE) as is_deleted
 		FROM urls
 		WHERE short_id = $1
 	`
 
 	url := &model.URL{}
-	err := r.db.QueryRow(query, id).Scan(&url.ShortURL, &url.OriginalURL, &url.UserID)
+	err := r.db.QueryRow(query, id).Scan(&url.ShortURL, &url.OriginalURL, &url.UserID, &url.IsDeleted)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("failed to query url: %w", err)
+	}
+
+	// Если URL помечен как удалённый, возвращаем специальную ошибку
+	if url.IsDeleted {
+		return nil, ErrDeleted
 	}
 
 	return url, nil
@@ -169,12 +174,12 @@ func (r *PostgresURLRepository) GetAll() ([]*model.URL, error) {
 	return urls, nil
 }
 
-// GetByUserID возвращает все URL конкретного пользователя
+// GetByUserID возвращает все URL конкретного пользователя (исключая удалённые)
 func (r *PostgresURLRepository) GetByUserID(userID string) ([]*model.URL, error) {
 	query := `
-		SELECT short_id, original_url, user_id
+		SELECT short_id, original_url, user_id, COALESCE(is_deleted, FALSE) as is_deleted
 		FROM urls
-		WHERE user_id = $1
+		WHERE user_id = $1 AND COALESCE(is_deleted, FALSE) = FALSE
 		ORDER BY created_at DESC
 	`
 
@@ -187,7 +192,7 @@ func (r *PostgresURLRepository) GetByUserID(userID string) ([]*model.URL, error)
 	urls := make([]*model.URL, 0)
 	for rows.Next() {
 		url := &model.URL{}
-		if err := rows.Scan(&url.ShortURL, &url.OriginalURL, &url.UserID); err != nil {
+		if err := rows.Scan(&url.ShortURL, &url.OriginalURL, &url.UserID, &url.IsDeleted); err != nil {
 			continue
 		}
 		urls = append(urls, url)
@@ -198,6 +203,26 @@ func (r *PostgresURLRepository) GetByUserID(userID string) ([]*model.URL, error)
 	}
 
 	return urls, nil
+}
+
+// DeleteByIDs помечает URL как удалённые по списку коротких ID для конкретного пользователя
+func (r *PostgresURLRepository) DeleteByIDs(shortIDs []string, userID string) error {
+	if len(shortIDs) == 0 {
+		return nil
+	}
+
+	query := `
+		UPDATE urls
+		SET is_deleted = TRUE
+		WHERE short_id = ANY($1) AND user_id = $2
+	`
+
+	_, err := r.db.Exec(query, pq.Array(shortIDs), userID)
+	if err != nil {
+		return fmt.Errorf("failed to mark urls as deleted: %w", err)
+	}
+
+	return nil
 }
 
 // Close для PostgreSQL репозитория ничего не делает (соединение управляется на уровне приложения)

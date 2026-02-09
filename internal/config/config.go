@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -23,6 +25,9 @@ type Config struct {
 
 	// Строка подключения к базе данных PostgreSQL
 	DatabaseDSN string `env:"DATABASE_DSN"`
+
+	// Секретный ключ для подписи кук
+	SecretKey string `env:"SECRET_KEY"`
 }
 
 var (
@@ -33,6 +38,7 @@ var (
 	flagServerPort      = flag.String("server-port", "", "Порт для запуска сервера")
 	flagDatabaseDSN     = flag.String("d", "", "Строка подключения к базе данных")
 	flagDatabaseDSNLong = flag.String("database-dsn", "", "Строка подключения к базе данных")
+	flagSecretKey       = flag.String("s", "", "Секретный ключ для подписи кук")
 )
 
 func NewConfig() (*Config, error) {
@@ -53,6 +59,7 @@ func NewConfig() (*Config, error) {
 		LogLevel:        *flagLogLevel,
 		FileStoragePath: *flagFileStoragePath,
 		DatabaseDSN:     databaseDSN,
+		SecretKey:       *flagSecretKey,
 	}
 
 	// Переменные окружения перезаписывают флаги, если они установлены
@@ -70,6 +77,14 @@ func NewConfig() (*Config, error) {
 	}
 	if val, ok := os.LookupEnv("DATABASE_DSN"); ok {
 		cfg.DatabaseDSN = val
+	}
+	if val, ok := os.LookupEnv("SECRET_KEY"); ok {
+		cfg.SecretKey = val
+	}
+
+	// Если секретный ключ не задан, генерируем случайный
+	if cfg.SecretKey == "" {
+		cfg.SecretKey = generateSecretKey()
 	}
 
 	// Обработка SERVER_PORT - если задан, он перезаписывает ServerAddress и BaseURL
@@ -117,4 +132,11 @@ func (c *Config) validate() error {
 	}
 
 	return nil
+}
+
+// generateSecretKey генерирует случайный секретный ключ
+func generateSecretKey() string {
+	b := make([]byte, 32)
+	rand.Read(b)
+	return hex.EncodeToString(b)
 }

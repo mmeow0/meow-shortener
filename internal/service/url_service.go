@@ -4,10 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
-	"strconv"
-	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mmeow0/meow-shortener/internal/model"
 	"github.com/mmeow0/meow-shortener/internal/repository"
 )
@@ -19,22 +18,38 @@ type URLRepository interface {
 	FindByOriginalURL(originalURL string) (*model.URL, error)
 	GetAll() ([]*model.URL, error)
 	GetByUserID(userID string) ([]*model.URL, error)
+	DeleteByIDs(shortIDs []string, userID string) error
 	Close() error
+}
+
+// deleteTask представляет задачу на удаление URL
+type deleteTask struct {
+	shortIDs []string
+	userID   string
 }
 
 // URLService содержит бизнес-логику работы с URL
 type URLService struct {
-	repo    URLRepository
-	rand    *rand.Rand
-	counter uint64 // атомарный счётчик для UUID
+	repo       URLRepository
+	rand       *rand.Rand
+	deleteChan chan deleteTask
+	batchSize  int           // размер батча для удаления
+	batchTime  time.Duration // время ожидания накопления батча
 }
 
 func NewURLService(repo URLRepository) *URLService {
-	return &URLService{
-		repo:    repo,
-		rand:    rand.New(rand.NewSource(time.Now().UnixNano())),
-		counter: 0,
+	s := &URLService{
+		repo:       repo,
+		rand:       rand.New(rand.NewSource(time.Now().UnixNano())),
+		deleteChan: make(chan deleteTask, 100),
+		batchSize:  100,                    // обрабатываем до 100 URL за раз
+		batchTime:  10 * time.Millisecond,  // или каждые 10ms
 	}
+	
+	// Запускаем горутину для обработки удалений с батчингом
+	go s.processDeletes()
+	
+	return s
 }
 
 // ShortenURL создаёт короткий URL из оригинального
@@ -174,8 +189,75 @@ func (s *URLService) generateShortID() string {
 	return string(b)
 }
 
-// generateUUID генерирует простой UUID на основе счётчика
+// DeleteUserURLs добавляет задачу на удаление URL пользователя по списку коротких ID
+func (s *URLService) DeleteUserURLs(shortIDs []string, userID string) error {
+	if len(shortIDs) == 0 {
+		return nil
+	}
+
+	task := deleteTask{
+		shortIDs: shortIDs,
+		userID:   userID,
+	}
+	
+	// Неблокирующая отправка в канал (fan-in pattern)
+	select {
+	case s.deleteChan <- task:
+		// Успешно добавлено в канал для обработки
+	default:
+		// Канал переполнен - запускаем отдельную горутину
+		go func() {
+			s.deleteChan <- task
+		}()
+	}
+	
+	return nil
+}
+
+// processDeletes обрабатывает задачи на удаление с батчингом (fan-in pattern)
+func (s *URLService) processDeletes() {
+	ticker := time.NewTicker(s.batchTime)
+	defer ticker.Stop()
+	
+	// Буфер для накопления задач по пользователям
+	userBatches := make(map[string][]string)
+	
+	for {
+		select {
+		case task := <-s.deleteChan:
+			// Добавляем URL в батч для этого пользователя
+			userBatches[task.userID] = append(userBatches[task.userID], task.shortIDs...)
+			
+			// Если батч достиг максимального размера - обрабатываем немедленно
+			if len(userBatches[task.userID]) >= s.batchSize {
+				s.flushUserBatch(task.userID, userBatches[task.userID])
+				delete(userBatches, task.userID)
+			}
+			
+		case <-ticker.C:
+			// По таймеру обрабатываем все накопленные батчи
+			for userID, shortIDs := range userBatches {
+				if len(shortIDs) > 0 {
+					s.flushUserBatch(userID, shortIDs)
+				}
+			}
+			// Очищаем карту
+			userBatches = make(map[string][]string)
+		}
+	}
+}
+
+// flushUserBatch выполняет batch update для пользователя
+func (s *URLService) flushUserBatch(userID string, shortIDs []string) {
+	if len(shortIDs) == 0 {
+		return
+	}
+	
+	// Выполняем batch update в БД
+	s.repo.DeleteByIDs(shortIDs, userID)
+}
+
+// generateUUID генерирует UUID v4
 func (s *URLService) generateUUID() string {
-	id := atomic.AddUint64(&s.counter, 1)
-	return strconv.FormatUint(id, 10)
+	return uuid.New().String()
 }
