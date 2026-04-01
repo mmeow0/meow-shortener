@@ -1,3 +1,4 @@
+// Package middleware предоставляет HTTP middleware: подписанная cookie пользователя и gzip для запроса/ответа.
 package middleware
 
 import (
@@ -126,7 +127,7 @@ func verifySignedUserID(signedValue string, macPool *sync.Pool) (string, bool) {
 	return userID, true
 }
 
-// GetUserID извлекает userID из контекста
+// GetUserID возвращает идентификатор пользователя, установленный AuthMiddleware в контексте запроса.
 func GetUserID(ctx context.Context, logger *zap.Logger) string {
 	value := ctx.Value(userIDKey)
 	if value == nil {
@@ -146,7 +147,7 @@ func GetUserID(ctx context.Context, logger *zap.Logger) string {
 	return userID
 }
 
-// IsValidCookie проверяет, валидна ли cookie в контексте
+// IsValidCookie сообщает, была ли у запроса валидная подпись cookie user_id (см. AuthMiddleware).
 func IsValidCookie(ctx context.Context) bool {
 	value := ctx.Value(validCookie)
 	if value == nil {

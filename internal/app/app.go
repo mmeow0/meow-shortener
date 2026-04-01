@@ -1,3 +1,4 @@
+// Package app собирает конфигурацию, хранилище, сервис, хендлеры и HTTP-роутер приложения.
 package app
 
 import (
@@ -17,6 +18,7 @@ import (
 	"go.uber.org/zap"
 )
 
+// App держит зависимости запущенного сервера и реализует graceful закрытие ресурсов.
 type App struct {
 	cfg    *config.Config
 	router http.Handler
@@ -25,6 +27,8 @@ type App struct {
 	logger *zap.Logger
 }
 
+// InitializeApp загружает конфигурацию, подключает хранилище (PostgreSQL, файл или память),
+// строит роутер и опционально включает аудит по файлу или HTTP.
 func InitializeApp() (*App, error) {
 	cfg, err := config.NewConfig()
 	if err != nil {
@@ -116,6 +120,7 @@ func maskDSN(dsn string) string {
 	return u.String()
 }
 
+// Run поднимает сервер pprof на 127.0.0.1:6060 и слушает a.cfg.ServerAddress.
 func (a *App) Run() error {
 	pprofMux := http.NewServeMux()
 	pprofMux.HandleFunc("/debug/pprof/", pprof.Index)
@@ -139,7 +144,7 @@ func (a *App) Run() error {
 	return http.ListenAndServe(a.cfg.ServerAddress, a.router)
 }
 
-// Close закрывает все ресурсы приложения
+// Close закрывает репозиторий и пул соединений БД (если были инициализированы).
 func (a *App) Close() error {
 	if a.repo != nil {
 		if err := a.repo.Close(); err != nil {

@@ -1,3 +1,4 @@
+// Package logger настраивает zap-логер и middleware логирования HTTP-запросов.
 package logger
 
 import (

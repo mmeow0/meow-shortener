@@ -1,3 +1,14 @@
+// Package router собирает HTTP-маршруты сервиса сокращения ссылок (практический трек)
+// и подключает gzip, логирование и аутентификацию по подписанной cookie user_id.
+//
+// Зарегистрированные эндпоинты:
+//   - POST / — тело text/plain, оригинальный URL; ответ text/plain с короткой ссылкой (201 или 409).
+//   - POST /api/shorten — JSON {"url": "..."}; ответ {"result": "..."} (201 или 409).
+//   - POST /api/shorten/batch — пакетное сокращение JSON-массивом.
+//   - GET /api/user/urls — список ссылок пользователя (требуется валидная cookie; 204 если пусто).
+//   - DELETE /api/user/urls — мягкое удаление по JSON-массиву коротких id или полных URL (202).
+//   - GET /{id} — редирект 307 на оригинальный URL (404, 410 если удалено).
+//   - GET /ping — проверка БД (200 при успешном Ping, 500 при ошибке или отсутствии БД).
 package router
 
 import (
@@ -8,6 +19,7 @@ import (
 	"go.uber.org/zap"
 )
 
+// NewRouter возвращает chi.Mux с маршрутами хендлеров и общим middleware (gzip, лог, AuthMiddleware).
 func NewRouter(urlHandler *handler.URLHandler, pingHandler *handler.PingHandler, secretKey string, log *zap.Logger) *chi.Mux {
 	r := chi.NewRouter()
 

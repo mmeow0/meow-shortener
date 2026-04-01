@@ -7,11 +7,13 @@ import (
 	"go.uber.org/zap"
 )
 
+// PingHandler отвечает за проверку доступности PostgreSQL (эндпоинт GET /ping).
 type PingHandler struct {
 	db     *database.DB
 	logger *zap.Logger
 }
 
+// NewPingHandler создаёт обработчик ping. Если db == nil, Ping вернёт 500 Internal Server Error.
 func NewPingHandler(db *database.DB, logger *zap.Logger) *PingHandler {
 	return &PingHandler{
 		db:     db,
@@ -19,7 +21,7 @@ func NewPingHandler(db *database.DB, logger *zap.Logger) *PingHandler {
 	}
 }
 
-// Ping проверяет соединение с базой данных
+// Ping вызывает database.DB.Ping. Успех — 200 OK; ошибка или отсутствие БД — 500.
 func (h *PingHandler) Ping(res http.ResponseWriter, req *http.Request) {
 	// Если база данных не инициализирована, возвращаем 500
 	if h.db == nil {

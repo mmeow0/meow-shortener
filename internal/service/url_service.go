@@ -1,3 +1,4 @@
+// Package service содержит бизнес-логику сокращения URL, выборки и асинхронного пакетного удаления.
 package service
 
 import (
@@ -11,6 +12,7 @@ import (
 	"github.com/mmeow0/meow-shortener/internal/repository"
 )
 
+// URLRepository описывает хранилище коротких ссылок для URLService (in-memory, файл или PostgreSQL).
 type URLRepository interface {
 	Save(url *model.URL) error
 	BatchSave(urls []*model.URL) error
@@ -28,7 +30,7 @@ type deleteTask struct {
 	userID   string
 }
 
-// URLService содержит бизнес-логику работы с URL
+// URLService инкапсулирует операции над URL и фоновую обработку удалений с батчингом.
 type URLService struct {
 	repo       URLRepository
 	rand       *rand.Rand
@@ -37,6 +39,7 @@ type URLService struct {
 	batchTime  time.Duration // время ожидания накопления батча
 }
 
+// NewURLService создаёт сервис и запускает горутину обработки очереди удалений.
 func NewURLService(repo URLRepository) *URLService {
 	s := &URLService{
 		repo:       repo,
@@ -52,7 +55,8 @@ func NewURLService(repo URLRepository) *URLService {
 	return s
 }
 
-// ShortenURL создаёт короткий URL из оригинального
+// ShortenURL создаёт новую запись и возвращает короткий id (не полный URL).
+// При коллизии short_id повторяет попытки; repository.ErrConflict — если original_url уже есть (PostgreSQL).
 func (s *URLService) ShortenURL(originalURL, userID string) (string, error) {
 	const maxAttempts = 5
 
@@ -82,7 +86,7 @@ func (s *URLService) ShortenURL(originalURL, userID string) (string, error) {
 	return "", fmt.Errorf("failed to obtain unique id after %d attempts", maxAttempts)
 }
 
-// BatchShortenURL создаёт несколько коротких URL за одну операцию
+// BatchShortenURL атомарно сохраняет пакет ссылок (одна транзакция/операция в репозитории).
 func (s *URLService) BatchShortenURL(items []struct {
 	CorrelationID string
 	OriginalURL   string
@@ -152,7 +156,7 @@ func (s *URLService) BatchShortenURL(items []struct {
 	return results, nil
 }
 
-// GetOriginalURL возвращает оригинальный URL по короткому идентификатору
+// GetOriginalURL возвращает оригинальный URL по короткому id или ошибку репозитория (в т.ч. удалено).
 func (s *URLService) GetOriginalURL(shortID string) (string, error) {
 	url, err := s.repo.FindByID(shortID)
 	if err != nil {
@@ -162,17 +166,17 @@ func (s *URLService) GetOriginalURL(shortID string) (string, error) {
 	return url.OriginalURL, nil
 }
 
-// FindByOriginalURL находит URL по оригинальному URL
+// FindByOriginalURL возвращает сохранённую запись по полному оригинальному URL.
 func (s *URLService) FindByOriginalURL(originalURL string) (*model.URL, error) {
 	return s.repo.FindByOriginalURL(originalURL)
 }
 
-// GetAllURLs возвращает все сохранённые URL
+// GetAllURLs возвращает все записи из хранилища (включая помеченные удалёнными — зависит от репозитория).
 func (s *URLService) GetAllURLs() ([]*model.URL, error) {
 	return s.repo.GetAll()
 }
 
-// GetUserURLs возвращает все URL конкретного пользователя
+// GetUserURLs возвращает неудалённые ссылки пользователя userID.
 func (s *URLService) GetUserURLs(userID string) ([]*model.URL, error) {
 	return s.repo.GetByUserID(userID)
 }
@@ -189,7 +193,7 @@ func (s *URLService) generateShortID() string {
 	return string(b[:])
 }
 
-// DeleteUserURLs добавляет задачу на удаление URL пользователя по списку коротких ID
+// DeleteUserURLs ставит в очередь мягкое удаление shortIDs для userID (обработка асинхронная).
 func (s *URLService) DeleteUserURLs(shortIDs []string, userID string) error {
 	if len(shortIDs) == 0 {
 		return nil

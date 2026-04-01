@@ -1,3 +1,4 @@
+// Package config читает настройки из флагов командной строки и переменных окружения.
 package config
 
 import (
@@ -10,6 +11,7 @@ import (
 	"os"
 )
 
+// Config описывает параметры запуска бинарника shortener.
 type Config struct {
 	// Адрес запуска HTTP-сервера
 	ServerAddress string `env:"SERVER_ADDRESS" envDefault:"localhost:8080"`
@@ -49,6 +51,8 @@ var (
 	flagAuditURL        = flag.String("audit-url", "", "Полный URL удалённого приёмника аудита POST (пусто — отключено)")
 )
 
+// NewConfig разбирает flag.Parse() (если ещё не вызывали), затем переопределяет поля из окружения.
+// Пустой SECRET_KEY заменяется случайно сгенерированным значением.
 func NewConfig() (*Config, error) {
 	// Парсим флаги только если они ещё не распарсены
 	if !flag.Parsed() {

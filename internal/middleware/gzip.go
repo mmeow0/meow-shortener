@@ -90,7 +90,7 @@ func (c *compressReader) Close() error {
 	return c.zr.Close()
 }
 
-// GzipMiddleware возвращает middleware для поддержки gzip сжатия
+// GzipMiddleware сжимает ответы с Content-Type JSON/HTML при Accept-Encoding: gzip и разжимает входящее тело при Content-Encoding: gzip.
 func GzipMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// по умолчанию устанавливаем оригинальный http.ResponseWriter как тот,

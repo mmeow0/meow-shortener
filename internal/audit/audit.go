@@ -13,8 +13,10 @@ import (
 )
 
 const (
+	// ActionShorten — событие создания или повторного получения короткой ссылки.
 	ActionShorten = "shorten"
-	ActionFollow  = "follow"
+	// ActionFollow — переход по короткой ссылке (редирект).
+	ActionFollow = "follow"
 )
 
 // Event описывает одно событие аудита (формат JSON для приёмников).

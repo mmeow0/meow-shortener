@@ -1,3 +1,4 @@
+// Package database оборачивает подключение к PostgreSQL (драйвер lib/pq).
 package database
 
 import (

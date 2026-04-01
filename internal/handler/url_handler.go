@@ -1,3 +1,5 @@
+// Package handler реализует HTTP-обработчики API сокращения URL: plain/JSON создание,
+// редирект по короткому id, список и удаление ссылок пользователя, пакетное сокращение.
 package handler
 
 import (
@@ -19,6 +21,7 @@ import (
 	"go.uber.org/zap"
 )
 
+// URLHandler обрабатывает HTTP-запросы к сервису сокращения ссылок.
 type URLHandler struct {
 	service *service.URLService
 	baseURL string
@@ -26,6 +29,8 @@ type URLHandler struct {
 	audit   *audit.Publisher
 }
 
+// NewURLHandler создаёт обработчик. baseURL — префикс публичных коротких ссылок (без завершающего «/»).
+// auditPub может быть nil, тогда события аудита не публикуются.
 func NewURLHandler(service *service.URLService, baseURL string, logger *zap.Logger, auditPub *audit.Publisher) *URLHandler {
 	return &URLHandler{
 		service: service,
@@ -79,7 +84,8 @@ func (h *URLHandler) shortenURL(originalURL, userID string) (string, int, error)
 	return shortURL, http.StatusCreated, nil
 }
 
-// CreateShortURLPlain обрабатывает POST запрос для создания короткого URL (text/plain формат)
+// CreateShortURLPlain обрабатывает POST «/» с телом text/plain — одна строка с оригинальным URL.
+// Успех: 201 Created и тело с полной короткой ссылкой; конфликт дубликата original_url: 409 Conflict.
 func (h *URLHandler) CreateShortURLPlain(res http.ResponseWriter, req *http.Request) {
 	body, err := io.ReadAll(req.Body)
 	if err != nil {
@@ -114,7 +120,8 @@ func (h *URLHandler) CreateShortURLPlain(res http.ResponseWriter, req *http.Requ
 	}
 }
 
-// CreateShortURL обрабатывает POST запрос для создания короткого URL (JSON формат)
+// CreateShortURL обрабатывает POST «/api/shorten» с JSON model.ShortenRequest.
+// Ответ — model.ShortenResponse; коды 201, 409 или ошибки 400/500.
 func (h *URLHandler) CreateShortURL(res http.ResponseWriter, req *http.Request) {
 	var request model.ShortenRequest
 
@@ -160,7 +167,8 @@ func (h *URLHandler) CreateShortURL(res http.ResponseWriter, req *http.Request) 
 	}
 }
 
-// GetOriginalURL обрабатывает GET запрос для получения оригинального URL
+// GetOriginalURL обрабатывает GET «/{id}»: редирект 307 Temporary Redirect с заголовком Location.
+// 404 — не найдено; 410 Gone — запись помечена удалённой.
 func (h *URLHandler) GetOriginalURL(res http.ResponseWriter, req *http.Request) {
 	shortID := chi.URLParam(req, "id")
 
@@ -192,7 +200,8 @@ func (h *URLHandler) GetOriginalURL(res http.ResponseWriter, req *http.Request) 
 	h.publishAudit(audit.ActionFollow, originalURL, userID)
 }
 
-// GetUserURLs обрабатывает GET запрос для получения всех URL пользователя
+// GetUserURLs обрабатывает GET «/api/user/urls». Требуется валидная подписанная cookie user_id.
+// 200 OK и JSON-массив model.UserURLsResponse; 204 No Content если ссылок нет; 401 при невалидной cookie.
 func (h *URLHandler) GetUserURLs(res http.ResponseWriter, req *http.Request) {
 	// Проверяем валидность cookie
 	if !middleware.IsValidCookie(req.Context()) {
@@ -244,7 +253,8 @@ func (h *URLHandler) GetUserURLs(res http.ResponseWriter, req *http.Request) {
 	}
 }
 
-// DeleteUserURLs обрабатывает DELETE запрос для удаления URL пользователя
+// DeleteUserURLs обрабатывает DELETE «/api/user/urls» с телом model.DeleteURLsRequest (JSON-массив строк).
+// Элементы могут быть короткими id или полными URL; постановка на удаление асинхронна, ответ 202 Accepted.
 func (h *URLHandler) DeleteUserURLs(res http.ResponseWriter, req *http.Request) {
 	// Проверяем валидность cookie
 	if !middleware.IsValidCookie(req.Context()) {
@@ -302,7 +312,8 @@ func (h *URLHandler) DeleteUserURLs(res http.ResponseWriter, req *http.Request) 
 	res.WriteHeader(http.StatusAccepted)
 }
 
-// CreateShortURLBatch обрабатывает POST запрос для пакетного создания коротких URL
+// CreateShortURLBatch обрабатывает POST «/api/shorten/batch» с JSON-массивом model.BatchShortenRequest.
+// Ответ 201 Created и массив model.BatchShortenResponse с полными короткими URL.
 func (h *URLHandler) CreateShortURLBatch(res http.ResponseWriter, req *http.Request) {
 	var batchRequest []model.BatchShortenRequest
 

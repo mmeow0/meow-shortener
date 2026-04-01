@@ -1,6 +1,7 @@
+// Package model задаёт JSON-структуры запросов и ответов HTTP API практического трека.
 package model
 
-// URL представляет сущность сокращённого URL
+// URL — сущность сокращённой ссылки в хранилище.
 type URL struct {
 	UUID        string `json:"uuid"`         // Уникальный идентификатор записи
 	ShortURL    string `json:"short_url"`    // Короткий идентификатор
@@ -37,5 +38,5 @@ type BatchShortenResponse struct {
 	ShortURL      string `json:"short_url"`      // Результирующий сокращённый URL
 }
 
-// DeleteURLsRequest представляет запрос на удаление URL (массив коротких ID)
+// DeleteURLsRequest — тело DELETE /api/user/urls: JSON-массив коротких id или полных коротких URL.
 type DeleteURLsRequest []string
