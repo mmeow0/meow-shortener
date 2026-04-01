@@ -101,8 +101,8 @@ func ExampleNewRouter_redirect() {
 	if err != nil {
 		panic(err)
 	}
+	defer create.Body.Close()
 	shortFull, err := io.ReadAll(create.Body)
-	create.Body.Close()
 	if err != nil {
 		panic(err)
 	}
@@ -146,10 +146,12 @@ func ExampleNewRouter_userURLs() {
 	}
 	client := &http.Client{Jar: jar}
 
-	_, err = client.Post(srv.URL+"/api/shorten", "application/json", strings.NewReader(`{"url":"https://a.example"}`))
+	shortenResp, err := client.Post(srv.URL+"/api/shorten", "application/json", strings.NewReader(`{"url":"https://a.example"}`))
 	if err != nil {
 		panic(err)
 	}
+	defer shortenResp.Body.Close()
+	_, _ = io.Copy(io.Discard, shortenResp.Body)
 
 	resp, err := client.Get(srv.URL + "/api/user/urls")
 	if err != nil {
@@ -220,11 +222,11 @@ func ExampleNewRouter_deleteUserURLs() {
 	if err != nil {
 		panic(err)
 	}
+	defer cr.Body.Close()
 	var sr model.ShortenResponse
 	if err := json.NewDecoder(cr.Body).Decode(&sr); err != nil {
 		panic(err)
 	}
-	cr.Body.Close()
 
 	shortID := strings.TrimPrefix(sr.Result, srv.URL+"/")
 	delBody := fmt.Sprintf(`["%s"]`, shortID)
@@ -238,7 +240,8 @@ func ExampleNewRouter_deleteUserURLs() {
 	if err != nil {
 		panic(err)
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
 
 	fmt.Println(resp.StatusCode)
 
@@ -249,7 +252,8 @@ func ExampleNewRouter_deleteUserURLs() {
 	if err != nil {
 		panic(err)
 	}
-	get.Body.Close()
+	defer get.Body.Close()
+	_, _ = io.Copy(io.Discard, get.Body)
 	fmt.Println(get.StatusCode)
 	// Output:
 	// 202
