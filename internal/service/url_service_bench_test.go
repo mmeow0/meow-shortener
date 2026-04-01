@@ -74,8 +74,6 @@ func BenchmarkBatchShortenURL(b *testing.B) {
 		items[i].OriginalURL = "https://example.com"
 	}
 
-	
-
 	for b.Loop() {
 		_, _ = service.BatchShortenURL(items, "user1")
 	}

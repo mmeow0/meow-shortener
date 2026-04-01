@@ -106,4 +106,3 @@ func createSchemaDirectly(db *sql.DB) error {
 
 	return nil
 }
-

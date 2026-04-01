@@ -13,7 +13,7 @@ func NewLogger(level string) (*zap.Logger, error) {
 	// преобразуем текстовый уровень логирования в zap.AtomicLevel
 	lvl, err := zap.ParseAtomicLevel(level)
 	if err != nil {
-        return nil, fmt.Errorf("failed to set log level: %w", err)
+		return nil, fmt.Errorf("failed to set log level: %w", err)
 	}
 	// создаём новую конфигурацию логера
 	cfg := zap.NewProductionConfig()

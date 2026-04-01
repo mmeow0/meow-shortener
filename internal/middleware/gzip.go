@@ -49,7 +49,7 @@ func (c *compressWriter) WriteHeader(statusCode int) {
 // shouldCompress проверяет, следует ли сжимать контент данного типа
 func shouldCompress(contentType string) bool {
 	return strings.Contains(contentType, "application/json") ||
-		   strings.Contains(contentType, "text/html")
+		strings.Contains(contentType, "text/html")
 }
 
 // Close закрывает gzip.Writer и досылает все данные из буфера.

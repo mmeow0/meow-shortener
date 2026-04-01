@@ -13,7 +13,7 @@ import (
 
 var ErrNotFound = errors.New("url not found")
 var ErrAlreadyExists = errors.New("url id already exists")
-var ErrConflict = errors.New("url already exists") // Конфликт - URL уже существует с другим short_id
+var ErrConflict = errors.New("url already exists")  // Конфликт - URL уже существует с другим short_id
 var ErrDeleted = errors.New("url has been deleted") // URL был удалён (410 Gone)
 
 // InMemoryURLRepository базовая реализация хранилища URL в памяти
@@ -70,7 +70,7 @@ func (r *InMemoryURLRepository) FindByID(id string) (*model.URL, error) {
 	if !exists {
 		return nil, ErrNotFound
 	}
-	
+
 	if url.IsDeleted {
 		return nil, ErrDeleted
 	}

@@ -18,7 +18,7 @@ import (
 type contextKey string
 
 const (
-	userIDKey  contextKey = "userID"
+	userIDKey   contextKey = "userID"
 	validCookie contextKey = "validCookie"
 )
 
@@ -54,7 +54,7 @@ func AuthMiddleware(secretKey string, logger *zap.Logger) func(next http.Handler
 			} else {
 				// Проверяем подпись cookie
 				userID, isValidCookie = verifySignedUserID(cookie.Value, macPool)
-				
+
 				if !isValidCookie {
 					// Cookie невалидна, создаём новую
 					logger.Warn("invalid cookie signature, creating new user ID")

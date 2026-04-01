@@ -47,4 +47,3 @@ func (db *DB) Ping() error {
 	}
 	return db.DB.Ping()
 }
-

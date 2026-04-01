@@ -42,13 +42,13 @@ func NewURLService(repo URLRepository) *URLService {
 		repo:       repo,
 		rand:       rand.New(rand.NewSource(time.Now().UnixNano())),
 		deleteChan: make(chan deleteTask, 100),
-		batchSize:  100,                    // обрабатываем до 100 URL за раз
-		batchTime:  10 * time.Millisecond,  // или каждые 10ms
+		batchSize:  100,                   // обрабатываем до 100 URL за раз
+		batchTime:  10 * time.Millisecond, // или каждые 10ms
 	}
-	
+
 	// Запускаем горутину для обработки удалений с батчингом
 	go s.processDeletes()
-	
+
 	return s
 }
 
@@ -106,7 +106,7 @@ func (s *URLService) BatchShortenURL(items []struct {
 		// Пытаемся сгенерировать уникальный ID
 		for range maxAttempts {
 			shortID = s.generateShortID()
-			
+
 			// Проверяем, что ID уникален в текущем батче
 			duplicate := false
 			for _, u := range urls {
@@ -115,7 +115,7 @@ func (s *URLService) BatchShortenURL(items []struct {
 					break
 				}
 			}
-			
+
 			if !duplicate {
 				generated = true
 				break
@@ -199,7 +199,7 @@ func (s *URLService) DeleteUserURLs(shortIDs []string, userID string) error {
 		shortIDs: shortIDs,
 		userID:   userID,
 	}
-	
+
 	// Неблокирующая отправка в канал (fan-in pattern)
 	select {
 	case s.deleteChan <- task:
@@ -210,7 +210,7 @@ func (s *URLService) DeleteUserURLs(shortIDs []string, userID string) error {
 			s.deleteChan <- task
 		}()
 	}
-	
+
 	return nil
 }
 
@@ -218,22 +218,22 @@ func (s *URLService) DeleteUserURLs(shortIDs []string, userID string) error {
 func (s *URLService) processDeletes() {
 	ticker := time.NewTicker(s.batchTime)
 	defer ticker.Stop()
-	
+
 	// Буфер для накопления задач по пользователям
 	userBatches := make(map[string][]string)
-	
+
 	for {
 		select {
 		case task := <-s.deleteChan:
 			// Добавляем URL в батч для этого пользователя
 			userBatches[task.userID] = append(userBatches[task.userID], task.shortIDs...)
-			
+
 			// Если батч достиг максимального размера - обрабатываем немедленно
 			if len(userBatches[task.userID]) >= s.batchSize {
 				s.flushUserBatch(task.userID, userBatches[task.userID])
 				delete(userBatches, task.userID)
 			}
-			
+
 		case <-ticker.C:
 			// По таймеру обрабатываем все накопленные батчи
 			for userID, shortIDs := range userBatches {
@@ -252,7 +252,7 @@ func (s *URLService) flushUserBatch(userID string, shortIDs []string) {
 	if len(shortIDs) == 0 {
 		return
 	}
-	
+
 	// Выполняем batch update в БД
 	s.repo.DeleteByIDs(shortIDs, userID)
 }
