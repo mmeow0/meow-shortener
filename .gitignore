@@ -24,3 +24,7 @@ vendor/
 shortener
 
 logs.log
+.DS_Store
+
+covertest
+shortenertest

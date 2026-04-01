@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/mmeow0/meow-shortener/internal/audit"
 	"github.com/mmeow0/meow-shortener/internal/config"
 	"github.com/mmeow0/meow-shortener/internal/database"
 	"github.com/mmeow0/meow-shortener/internal/handler"
@@ -69,7 +70,22 @@ func InitializeApp() (*App, error) {
 	}
 
 	urlService := service.NewURLService(urlRepo)
-	urlHandler := handler.NewURLHandler(urlService, cfg.BaseURL, log)
+
+	var auditObservers []audit.Observer
+	if cfg.AuditFile != "" {
+		auditObservers = append(auditObservers, audit.NewFileObserver(cfg.AuditFile))
+		log.Info("Audit file sink enabled", zap.String("path", cfg.AuditFile))
+	}
+	if cfg.AuditURL != "" {
+		auditObservers = append(auditObservers, audit.NewHTTPObserver(cfg.AuditURL))
+		log.Info("Audit HTTP sink enabled", zap.String("url", cfg.AuditURL))
+	}
+	var auditPublisher *audit.Publisher
+	if len(auditObservers) > 0 {
+		auditPublisher = audit.NewPublisher(auditObservers, log)
+	}
+
+	urlHandler := handler.NewURLHandler(urlService, cfg.BaseURL, log, auditPublisher)
 	pingHandler := handler.NewPingHandler(db, log)
 	rt := router.NewRouter(urlHandler, pingHandler, cfg.SecretKey, log)
 

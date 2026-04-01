@@ -28,6 +28,12 @@ type Config struct {
 
 	// Секретный ключ для подписи кук
 	SecretKey string `env:"SECRET_KEY"`
+
+	// Путь к файлу логов аудита (пусто — запись в файл отключена)
+	AuditFile string `env:"AUDIT_FILE"`
+
+	// URL удалённого приёмника аудита POST (пусто — отправка отключена)
+	AuditURL string `env:"AUDIT_URL"`
 }
 
 var (
@@ -39,6 +45,8 @@ var (
 	flagDatabaseDSN     = flag.String("d", "", "Строка подключения к базе данных")
 	flagDatabaseDSNLong = flag.String("database-dsn", "", "Строка подключения к базе данных")
 	flagSecretKey       = flag.String("s", "", "Секретный ключ для подписи кук")
+	flagAuditFile       = flag.String("audit-file", "", "Путь к файлу-приёмнику логов аудита (пусто — отключено)")
+	flagAuditURL        = flag.String("audit-url", "", "Полный URL удалённого приёмника аудита POST (пусто — отключено)")
 )
 
 func NewConfig() (*Config, error) {
@@ -60,6 +68,8 @@ func NewConfig() (*Config, error) {
 		FileStoragePath: *flagFileStoragePath,
 		DatabaseDSN:     databaseDSN,
 		SecretKey:       *flagSecretKey,
+		AuditFile:       *flagAuditFile,
+		AuditURL:        *flagAuditURL,
 	}
 
 	// Переменные окружения перезаписывают флаги, если они установлены
@@ -80,6 +90,12 @@ func NewConfig() (*Config, error) {
 	}
 	if val, ok := os.LookupEnv("SECRET_KEY"); ok {
 		cfg.SecretKey = val
+	}
+	if val, ok := os.LookupEnv("AUDIT_FILE"); ok {
+		cfg.AuditFile = val
+	}
+	if val, ok := os.LookupEnv("AUDIT_URL"); ok {
+		cfg.AuditURL = val
 	}
 
 	// Если секретный ключ не задан, генерируем случайный

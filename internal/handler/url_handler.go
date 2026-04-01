@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/mmeow0/meow-shortener/internal/audit"
 	"github.com/mmeow0/meow-shortener/internal/middleware"
 	"github.com/mmeow0/meow-shortener/internal/model"
 	"github.com/mmeow0/meow-shortener/internal/repository"
@@ -21,14 +23,28 @@ type URLHandler struct {
 	service *service.URLService
 	baseURL string
 	logger  *zap.Logger
+	audit   *audit.Publisher
 }
 
-func NewURLHandler(service *service.URLService, baseURL string, logger *zap.Logger) *URLHandler {
+func NewURLHandler(service *service.URLService, baseURL string, logger *zap.Logger, auditPub *audit.Publisher) *URLHandler {
 	return &URLHandler{
 		service: service,
 		baseURL: baseURL,
 		logger:  logger,
+		audit:   auditPub,
 	}
+}
+
+func (h *URLHandler) publishAudit(action, originalURL, userID string) {
+	if h.audit == nil {
+		return
+	}
+	h.audit.Publish(audit.Event{
+		TS:     time.Now().Unix(),
+		Action: action,
+		UserID: userID,
+		URL:    originalURL,
+	})
 }
 
 // shortenURL создаёт короткий URL с обработкой конфликтов
@@ -92,6 +108,10 @@ func (h *URLHandler) CreateShortURLPlain(res http.ResponseWriter, req *http.Requ
 	res.Header().Set("Content-Type", "text/plain")
 	res.WriteHeader(statusCode)
 	res.Write([]byte(shortURL))
+
+	if statusCode == http.StatusCreated || statusCode == http.StatusConflict {
+		h.publishAudit(audit.ActionShorten, originalURL, userID)
+	}
 }
 
 // CreateShortURL обрабатывает POST запрос для создания короткого URL (JSON формат)
@@ -132,6 +152,11 @@ func (h *URLHandler) CreateShortURL(res http.ResponseWriter, req *http.Request) 
 	encoder := json.NewEncoder(res)
 	if err := encoder.Encode(response); err != nil {
 		log.Printf("failed to encode response: %v", err)
+		return
+	}
+
+	if statusCode == http.StatusCreated || statusCode == http.StatusConflict {
+		h.publishAudit(audit.ActionShorten, request.URL, userID)
 	}
 }
 
@@ -162,6 +187,9 @@ func (h *URLHandler) GetOriginalURL(res http.ResponseWriter, req *http.Request) 
 
 	res.Header().Set("Location", originalURL)
 	res.WriteHeader(http.StatusTemporaryRedirect)
+
+	userID := middleware.GetUserID(req.Context(), h.logger)
+	h.publishAudit(audit.ActionFollow, originalURL, userID)
 }
 
 // GetUserURLs обрабатывает GET запрос для получения всех URL пользователя
