@@ -110,7 +110,7 @@ func (r *InMemoryURLRepository) GetByUserID(userID string) ([]*model.URL, error)
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	urls := make([]*model.URL, 0)
+	urls := make([]*model.URL, 0, len(r.urls))
 	for _, url := range r.urls {
 		if url.UserID == userID && !url.IsDeleted {
 			urls = append(urls, url)

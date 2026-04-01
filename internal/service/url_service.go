@@ -182,11 +182,11 @@ func (s *URLService) generateShortID() string {
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	const length = 8
 
-	b := make([]byte, length)
+	var b [length]byte
 	for i := range b {
 		b[i] = charset[s.rand.Intn(len(charset))]
 	}
-	return string(b)
+	return string(b[:])
 }
 
 // DeleteUserURLs добавляет задачу на удаление URL пользователя по списку коротких ID
@@ -241,8 +241,8 @@ func (s *URLService) processDeletes() {
 					s.flushUserBatch(userID, shortIDs)
 				}
 			}
-			// Очищаем карту
-			userBatches = make(map[string][]string)
+			// Переиспользуем карту вместо новой аллокации на каждый тик
+			clear(userBatches)
 		}
 	}
 }
