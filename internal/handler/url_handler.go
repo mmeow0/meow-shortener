@@ -115,7 +115,7 @@ func (h *URLHandler) CreateShortURLPlain(res http.ResponseWriter, req *http.Requ
 	res.WriteHeader(statusCode)
 	_, _ = io.WriteString(res, shortURL)
 
-	if statusCode == http.StatusCreated || statusCode == http.StatusConflict {
+	if statusCode == http.StatusCreated {
 		h.publishAudit(audit.ActionShorten, originalURL, userID)
 	}
 }
@@ -162,7 +162,7 @@ func (h *URLHandler) CreateShortURL(res http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	if statusCode == http.StatusCreated || statusCode == http.StatusConflict {
+	if statusCode == http.StatusCreated {
 		h.publishAudit(audit.ActionShorten, request.URL, userID)
 	}
 }

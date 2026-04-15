@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
 )
 
 // Config описывает параметры запуска бинарника shortener.
@@ -36,6 +37,9 @@ type Config struct {
 
 	// URL удалённого приёмника аудита POST (пусто — отправка отключена)
 	AuditURL string `env:"AUDIT_URL"`
+
+	// Флаг включения debug/pprof эндпоинтов (по умолчанию выключены)
+	EnablePprof bool `env:"ENABLE_PPROF" envDefault:"false"`
 }
 
 var (
@@ -49,6 +53,7 @@ var (
 	flagSecretKey       = flag.String("s", "", "Секретный ключ для подписи кук")
 	flagAuditFile       = flag.String("audit-file", "", "Путь к файлу-приёмнику логов аудита (пусто — отключено)")
 	flagAuditURL        = flag.String("audit-url", "", "Полный URL удалённого приёмника аудита POST (пусто — отключено)")
+	flagEnablePprof     = flag.Bool("enable-pprof", false, "Включить debug/pprof сервер на 127.0.0.1:6060")
 )
 
 // NewConfig разбирает flag.Parse() (если ещё не вызывали), затем переопределяет поля из окружения.
@@ -74,6 +79,7 @@ func NewConfig() (*Config, error) {
 		SecretKey:       *flagSecretKey,
 		AuditFile:       *flagAuditFile,
 		AuditURL:        *flagAuditURL,
+		EnablePprof:     *flagEnablePprof,
 	}
 
 	// Переменные окружения перезаписывают флаги, если они установлены
@@ -100,6 +106,13 @@ func NewConfig() (*Config, error) {
 	}
 	if val, ok := os.LookupEnv("AUDIT_URL"); ok {
 		cfg.AuditURL = val
+	}
+	if val, ok := os.LookupEnv("ENABLE_PPROF"); ok {
+		enabled, err := strconv.ParseBool(val)
+		if err != nil {
+			return nil, fmt.Errorf("invalid ENABLE_PPROF value %q: %w", val, err)
+		}
+		cfg.EnablePprof = enabled
 	}
 
 	// Если секретный ключ не задан, генерируем случайный

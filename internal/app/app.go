@@ -120,25 +120,27 @@ func maskDSN(dsn string) string {
 	return u.String()
 }
 
-// Run поднимает сервер pprof на 127.0.0.1:6060 и слушает a.cfg.ServerAddress.
+// Run слушает a.cfg.ServerAddress и опционально поднимает pprof на 127.0.0.1:6060.
 func (a *App) Run() error {
-	pprofMux := http.NewServeMux()
-	pprofMux.HandleFunc("/debug/pprof/", pprof.Index)
-	pprofMux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-	pprofMux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-	pprofMux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-	pprofMux.HandleFunc("/debug/pprof/trace", pprof.Trace)
-	pprofMux.Handle("/debug/pprof/heap", pprof.Handler("heap"))
-	pprofMux.Handle("/debug/pprof/goroutine", pprof.Handler("goroutine"))
-	pprofMux.Handle("/debug/pprof/allocs", pprof.Handler("allocs"))
+	if a.cfg.EnablePprof {
+		pprofMux := http.NewServeMux()
+		pprofMux.HandleFunc("/debug/pprof/", pprof.Index)
+		pprofMux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		pprofMux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		pprofMux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		pprofMux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+		pprofMux.Handle("/debug/pprof/heap", pprof.Handler("heap"))
+		pprofMux.Handle("/debug/pprof/goroutine", pprof.Handler("goroutine"))
+		pprofMux.Handle("/debug/pprof/allocs", pprof.Handler("allocs"))
 
-	go func() {
-		const addr = "127.0.0.1:6060"
-		a.logger.Info("pprof server started", zap.String("addr", addr), zap.String("heap", "http://"+addr+"/debug/pprof/heap"))
-		if err := http.ListenAndServe(addr, pprofMux); err != nil {
-			a.logger.Error("pprof server stopped", zap.Error(err))
-		}
-	}()
+		go func() {
+			const addr = "127.0.0.1:6060"
+			a.logger.Info("pprof server started", zap.String("addr", addr), zap.String("heap", "http://"+addr+"/debug/pprof/heap"))
+			if err := http.ListenAndServe(addr, pprofMux); err != nil {
+				a.logger.Error("pprof server stopped", zap.Error(err))
+			}
+		}()
+	}
 
 	a.logger.Info("Starting server", zap.String("address", a.cfg.ServerAddress))
 	return http.ListenAndServe(a.cfg.ServerAddress, a.router)

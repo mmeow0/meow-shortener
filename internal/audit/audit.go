@@ -36,11 +36,15 @@ type Observer interface {
 type Publisher struct {
 	observers []Observer
 	logger    *zap.Logger
+	initOnce  sync.Once
+	queues    []chan Event
 }
 
 // NewPublisher создаёт издателя аудита; observers может быть пустым.
 func NewPublisher(observers []Observer, logger *zap.Logger) *Publisher {
-	return &Publisher{observers: observers, logger: logger}
+	p := &Publisher{observers: observers, logger: logger}
+	p.initWorkers()
+	return p
 }
 
 // Publish асинхронно уведомляет всех наблюдателей.
@@ -48,13 +52,32 @@ func (p *Publisher) Publish(e Event) {
 	if p == nil || len(p.observers) == 0 {
 		return
 	}
-	for _, o := range p.observers {
-		o := o
-		go func() {
-			if err := o.Notify(e); err != nil && p.logger != nil {
-				p.logger.Warn("audit delivery failed", zap.Error(err))
+	p.initOnce.Do(p.initWorkers)
+	for i := range p.queues {
+		select {
+		case p.queues[i] <- e:
+		default:
+			if p.logger != nil {
+				p.logger.Warn("audit queue is full, dropping event", zap.Int("observer_index", i))
 			}
-		}()
+		}
+	}
+}
+
+const observerQueueSize = 256
+
+func (p *Publisher) initWorkers() {
+	p.queues = make([]chan Event, len(p.observers))
+	for i, o := range p.observers {
+		q := make(chan Event, observerQueueSize)
+		p.queues[i] = q
+		go func(observer Observer, events <-chan Event) {
+			for event := range events {
+				if err := observer.Notify(event); err != nil && p.logger != nil {
+					p.logger.Warn("audit delivery failed", zap.Error(err))
+				}
+			}
+		}(o, q)
 	}
 }
 
@@ -62,6 +85,7 @@ func (p *Publisher) Publish(e Event) {
 type FileObserver struct {
 	path string
 	mu   sync.Mutex
+	file *os.File
 }
 
 // NewFileObserver возвращает наблюдателя, пишущего в указанный файл.
@@ -79,13 +103,42 @@ func (f *FileObserver) Notify(e Event) error {
 		return err
 	}
 
-	file, err := os.OpenFile(f.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
+	if err := f.ensureFileLocked(); err != nil {
 		return err
 	}
-	defer file.Close()
+	_, err = f.file.Write(append(data, '\n'))
+	return err
+}
 
-	_, err = file.Write(append(data, '\n'))
+func (f *FileObserver) ensureFileLocked() error {
+	if f.file != nil {
+		if _, err := os.Stat(f.path); err != nil {
+			if !os.IsNotExist(err) {
+				return err
+			}
+			_ = f.file.Close()
+			f.file = nil
+		}
+	}
+	if f.file == nil {
+		file, err := os.OpenFile(f.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			return err
+		}
+		f.file = file
+	}
+	return nil
+}
+
+// Close закрывает файловый дескриптор наблюдателя.
+func (f *FileObserver) Close() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.file == nil {
+		return nil
+	}
+	err := f.file.Close()
+	f.file = nil
 	return err
 }
 
