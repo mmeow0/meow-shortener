@@ -4,10 +4,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/mmeow0/meow-shortener/internal/audit"
 	"github.com/mmeow0/meow-shortener/internal/model"
 	"github.com/mmeow0/meow-shortener/internal/repository"
 	"github.com/mmeow0/meow-shortener/internal/service"
@@ -30,7 +34,7 @@ func setupHandler(t *testing.T) (*URLHandler, *chi.Mux) {
 	}
 
 	svc := service.NewURLService(repo)
-	h := NewURLHandler(svc, "http://localhost:8080", logger)
+	h := NewURLHandler(svc, "http://localhost:8080", logger, nil)
 
 	r := chi.NewRouter()
 	r.Post("/", h.CreateShortURLPlain)
@@ -447,5 +451,82 @@ func TestHandlePost_API_Shorten_Example(t *testing.T) {
 	shortID := strings.TrimPrefix(response.Result, "http://localhost:8080/")
 	if len(shortID) != 8 {
 		t.Errorf("ожидалась длина короткого ID = 8 символов, получен ID: %s", shortID)
+	}
+}
+
+func waitAuditLine(t *testing.T, path string) string {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		b, err := os.ReadFile(path)
+		if err == nil && len(b) > 0 {
+			return strings.TrimSpace(string(b))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("нет записи аудита в %s", path)
+	return ""
+}
+
+func TestAudit_ShortenAndFollow_FileSink(t *testing.T) {
+	tempDir := t.TempDir()
+	storagePath := filepath.Join(tempDir, "store.json")
+	auditPath := filepath.Join(tempDir, "audit.log")
+
+	repo, err := repository.NewFileURLRepository(storagePath)
+	if err != nil {
+		t.Fatalf("репозиторий: %v", err)
+	}
+	logger, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fileObs := audit.NewFileObserver(auditPath)
+	pub := audit.NewPublisher([]audit.Observer{fileObs}, zap.NewNop())
+	svc := service.NewURLService(repo)
+	h := NewURLHandler(svc, "http://localhost:8080", logger, pub)
+
+	r := chi.NewRouter()
+	r.Post("/api/shorten", h.CreateShortURL)
+	r.Get("/{id}", h.GetOriginalURL)
+
+	original := "https://practicum.yandex.ru/audit-test"
+	postReq := httptest.NewRequest(http.MethodPost, "/api/shorten", strings.NewReader(`{"url":"`+original+`"}`))
+	postReq.Header.Set("Content-Type", "application/json")
+	postW := httptest.NewRecorder()
+	r.ServeHTTP(postW, postReq)
+	if postW.Code != http.StatusCreated {
+		t.Fatalf("POST статус %d", postW.Code)
+	}
+
+	var shortenResp model.ShortenResponse
+	_ = json.NewDecoder(postW.Body).Decode(&shortenResp)
+	shortID := strings.TrimPrefix(shortenResp.Result, "http://localhost:8080/")
+
+	line := waitAuditLine(t, auditPath)
+	var ev audit.Event
+	if err := json.Unmarshal([]byte(line), &ev); err != nil {
+		t.Fatal(err)
+	}
+	if ev.Action != audit.ActionShorten || ev.URL != original {
+		t.Fatalf("событие shorten: %+v", ev)
+	}
+
+	_ = os.Remove(auditPath)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/"+shortID, nil)
+	getW := httptest.NewRecorder()
+	r.ServeHTTP(getW, getReq)
+	if getW.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("GET статус %d", getW.Code)
+	}
+
+	line = waitAuditLine(t, auditPath)
+	if err := json.Unmarshal([]byte(line), &ev); err != nil {
+		t.Fatal(err)
+	}
+	if ev.Action != audit.ActionFollow || ev.URL != original {
+		t.Fatalf("событие follow: %+v", ev)
 	}
 }

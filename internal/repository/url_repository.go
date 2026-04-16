@@ -1,3 +1,4 @@
+// Package repository реализует хранение URL в памяти, в файле (NDJSON) и в PostgreSQL.
 package repository
 
 import (
@@ -11,17 +12,25 @@ import (
 	"github.com/mmeow0/meow-shortener/internal/model"
 )
 
+// ErrNotFound возвращается, если короткий идентификатор не найден.
 var ErrNotFound = errors.New("url not found")
-var ErrAlreadyExists = errors.New("url id already exists")
-var ErrConflict = errors.New("url already exists") // Конфликт - URL уже существует с другим short_id
-var ErrDeleted = errors.New("url has been deleted") // URL был удалён (410 Gone)
 
-// InMemoryURLRepository базовая реализация хранилища URL в памяти
+// ErrAlreadyExists означает коллизию генерируемого short_id при вставке.
+var ErrAlreadyExists = errors.New("url id already exists")
+
+// ErrConflict означает, что такой original_url уже сохранён с другим short_id (уникальность в БД).
+var ErrConflict = errors.New("url already exists")
+
+// ErrDeleted означает, что запись существует, но помечена удалённой (ответ 410 Gone).
+var ErrDeleted = errors.New("url has been deleted")
+
+// InMemoryURLRepository — потокобезопасное хранилище в памяти (карта по short_id).
 type InMemoryURLRepository struct {
 	mu   sync.RWMutex
 	urls map[string]*model.URL // ключ - ShortURL
 }
 
+// NewInMemoryURLRepository создаёт пустое in-memory хранилище.
 func NewInMemoryURLRepository() *InMemoryURLRepository {
 	return &InMemoryURLRepository{
 		urls: make(map[string]*model.URL),
@@ -70,7 +79,7 @@ func (r *InMemoryURLRepository) FindByID(id string) (*model.URL, error) {
 	if !exists {
 		return nil, ErrNotFound
 	}
-	
+
 	if url.IsDeleted {
 		return nil, ErrDeleted
 	}
@@ -110,7 +119,7 @@ func (r *InMemoryURLRepository) GetByUserID(userID string) ([]*model.URL, error)
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	urls := make([]*model.URL, 0)
+	urls := make([]*model.URL, 0, len(r.urls))
 	for _, url := range r.urls {
 		if url.UserID == userID && !url.IsDeleted {
 			urls = append(urls, url)
@@ -139,7 +148,7 @@ func (r *InMemoryURLRepository) Close() error {
 	return nil
 }
 
-// FileURLRepository декоратор над InMemoryURLRepository с сохранением в файл
+// FileURLRepository дополняет InMemoryURLRepository дозаписью JSON-строк в файл и перезаписью при удалении.
 type FileURLRepository struct {
 	*InMemoryURLRepository
 	filePath string
@@ -148,6 +157,7 @@ type FileURLRepository struct {
 	mu       sync.Mutex // отдельная блокировка для операций с файлом
 }
 
+// NewFileURLRepository загружает существующий файл (если есть) и открывает его для append-записи.
 func NewFileURLRepository(filePath string) (*FileURLRepository, error) {
 	inMemoryRepo := NewInMemoryURLRepository()
 

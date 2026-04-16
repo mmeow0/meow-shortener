@@ -18,7 +18,6 @@ type compressWriter struct {
 func newCompressWriter(w http.ResponseWriter) *compressWriter {
 	return &compressWriter{
 		w:        w,
-		zw:       gzip.NewWriter(w),
 		compress: false,
 	}
 }
@@ -41,6 +40,7 @@ func (c *compressWriter) WriteHeader(statusCode int) {
 		if shouldCompress(contentType) {
 			c.w.Header().Set("Content-Encoding", "gzip")
 			c.compress = true
+			c.zw = gzip.NewWriter(c.w)
 		}
 	}
 	c.w.WriteHeader(statusCode)
@@ -49,12 +49,12 @@ func (c *compressWriter) WriteHeader(statusCode int) {
 // shouldCompress проверяет, следует ли сжимать контент данного типа
 func shouldCompress(contentType string) bool {
 	return strings.Contains(contentType, "application/json") ||
-		   strings.Contains(contentType, "text/html")
+		strings.Contains(contentType, "text/html")
 }
 
 // Close закрывает gzip.Writer и досылает все данные из буфера.
 func (c *compressWriter) Close() error {
-	if c.compress {
+	if c.compress && c.zw != nil {
 		return c.zw.Close()
 	}
 	return nil
@@ -90,7 +90,7 @@ func (c *compressReader) Close() error {
 	return c.zr.Close()
 }
 
-// GzipMiddleware возвращает middleware для поддержки gzip сжатия
+// GzipMiddleware сжимает ответы с Content-Type JSON/HTML при Accept-Encoding: gzip и разжимает входящее тело при Content-Encoding: gzip.
 func GzipMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// по умолчанию устанавливаем оригинальный http.ResponseWriter как тот,

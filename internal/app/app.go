@@ -1,10 +1,13 @@
+// Package app собирает конфигурацию, хранилище, сервис, хендлеры и HTTP-роутер приложения.
 package app
 
 import (
 	"fmt"
 	"net/http"
+	"net/http/pprof"
 	"net/url"
 
+	"github.com/mmeow0/meow-shortener/internal/audit"
 	"github.com/mmeow0/meow-shortener/internal/config"
 	"github.com/mmeow0/meow-shortener/internal/database"
 	"github.com/mmeow0/meow-shortener/internal/handler"
@@ -15,6 +18,7 @@ import (
 	"go.uber.org/zap"
 )
 
+// App держит зависимости запущенного сервера и реализует graceful закрытие ресурсов.
 type App struct {
 	cfg    *config.Config
 	router http.Handler
@@ -23,6 +27,8 @@ type App struct {
 	logger *zap.Logger
 }
 
+// InitializeApp загружает конфигурацию, подключает хранилище (PostgreSQL, файл или память),
+// строит роутер и опционально включает аудит по файлу или HTTP.
 func InitializeApp() (*App, error) {
 	cfg, err := config.NewConfig()
 	if err != nil {
@@ -69,7 +75,22 @@ func InitializeApp() (*App, error) {
 	}
 
 	urlService := service.NewURLService(urlRepo)
-	urlHandler := handler.NewURLHandler(urlService, cfg.BaseURL, log)
+
+	var auditObservers []audit.Observer
+	if cfg.AuditFile != "" {
+		auditObservers = append(auditObservers, audit.NewFileObserver(cfg.AuditFile))
+		log.Info("Audit file sink enabled", zap.String("path", cfg.AuditFile))
+	}
+	if cfg.AuditURL != "" {
+		auditObservers = append(auditObservers, audit.NewHTTPObserver(cfg.AuditURL))
+		log.Info("Audit HTTP sink enabled", zap.String("url", cfg.AuditURL))
+	}
+	var auditPublisher *audit.Publisher
+	if len(auditObservers) > 0 {
+		auditPublisher = audit.NewPublisher(auditObservers, log)
+	}
+
+	urlHandler := handler.NewURLHandler(urlService, cfg.BaseURL, log, auditPublisher)
 	pingHandler := handler.NewPingHandler(db, log)
 	rt := router.NewRouter(urlHandler, pingHandler, cfg.SecretKey, log)
 
@@ -99,12 +120,33 @@ func maskDSN(dsn string) string {
 	return u.String()
 }
 
+// Run слушает a.cfg.ServerAddress и опционально поднимает pprof на 127.0.0.1:6060.
 func (a *App) Run() error {
+	if a.cfg.EnablePprof {
+		pprofMux := http.NewServeMux()
+		pprofMux.HandleFunc("/debug/pprof/", pprof.Index)
+		pprofMux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		pprofMux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		pprofMux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		pprofMux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+		pprofMux.Handle("/debug/pprof/heap", pprof.Handler("heap"))
+		pprofMux.Handle("/debug/pprof/goroutine", pprof.Handler("goroutine"))
+		pprofMux.Handle("/debug/pprof/allocs", pprof.Handler("allocs"))
+
+		go func() {
+			const addr = "127.0.0.1:6060"
+			a.logger.Info("pprof server started", zap.String("addr", addr), zap.String("heap", "http://"+addr+"/debug/pprof/heap"))
+			if err := http.ListenAndServe(addr, pprofMux); err != nil {
+				a.logger.Error("pprof server stopped", zap.Error(err))
+			}
+		}()
+	}
+
 	a.logger.Info("Starting server", zap.String("address", a.cfg.ServerAddress))
 	return http.ListenAndServe(a.cfg.ServerAddress, a.router)
 }
 
-// Close закрывает все ресурсы приложения
+// Close закрывает репозиторий и пул соединений БД (если были инициализированы).
 func (a *App) Close() error {
 	if a.repo != nil {
 		if err := a.repo.Close(); err != nil {

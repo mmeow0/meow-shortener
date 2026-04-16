@@ -8,12 +8,12 @@ import (
 	"github.com/mmeow0/meow-shortener/internal/model"
 )
 
-// PostgresURLRepository реализация хранилища URL в PostgreSQL
+// PostgresURLRepository хранит ссылки в таблице urls (short_id, original_url, user_id, …).
 type PostgresURLRepository struct {
 	db *sql.DB
 }
 
-// NewPostgresURLRepository создаёт новый PostgreSQL репозиторий
+// NewPostgresURLRepository оборачивает *sql.DB готовыми запросами вставки/выборки/soft delete.
 func NewPostgresURLRepository(db *sql.DB) *PostgresURLRepository {
 	return &PostgresURLRepository{
 		db: db,
@@ -31,13 +31,13 @@ func (r *PostgresURLRepository) Save(url *model.URL) error {
 
 	var returnedShortID string
 	err := r.db.QueryRow(query, url.ShortURL, url.OriginalURL, url.UserID).Scan(&returnedShortID)
-	
+
 	if err != nil {
 		if err == sql.ErrNoRows {
 			// Конфликт: URL уже существует, возвращаем ErrConflict
 			return ErrConflict
 		}
-		
+
 		// Проверяем на дубликат short_id через pq.Error
 		if pqErr, ok := err.(*pq.Error); ok {
 			// 23505 - код ошибки unique_violation в PostgreSQL
@@ -229,4 +229,3 @@ func (r *PostgresURLRepository) DeleteByIDs(shortIDs []string, userID string) er
 func (r *PostgresURLRepository) Close() error {
 	return nil
 }
-

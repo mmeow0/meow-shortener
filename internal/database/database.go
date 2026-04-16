@@ -1,3 +1,4 @@
+// Package database оборачивает подключение к PostgreSQL (драйвер lib/pq).
 package database
 
 import (
@@ -47,4 +48,3 @@ func (db *DB) Ping() error {
 	}
 	return db.DB.Ping()
 }
-

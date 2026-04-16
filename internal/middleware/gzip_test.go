@@ -35,7 +35,7 @@ func setupTestHandler(t *testing.T) http.Handler {
 	}
 
 	svc := service.NewURLService(repo)
-	h := handler.NewURLHandler(svc, "http://localhost:8080", logger)
+	h := handler.NewURLHandler(svc, "http://localhost:8080", logger, nil)
 
 	r := chi.NewRouter()
 	r.Use(middleware.GzipMiddleware)

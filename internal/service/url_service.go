@@ -1,3 +1,4 @@
+// Package service содержит бизнес-логику сокращения URL, выборки и асинхронного пакетного удаления.
 package service
 
 import (
@@ -11,6 +12,7 @@ import (
 	"github.com/mmeow0/meow-shortener/internal/repository"
 )
 
+// URLRepository описывает хранилище коротких ссылок для URLService (in-memory, файл или PostgreSQL).
 type URLRepository interface {
 	Save(url *model.URL) error
 	BatchSave(urls []*model.URL) error
@@ -28,7 +30,7 @@ type deleteTask struct {
 	userID   string
 }
 
-// URLService содержит бизнес-логику работы с URL
+// URLService инкапсулирует операции над URL и фоновую обработку удалений с батчингом.
 type URLService struct {
 	repo       URLRepository
 	rand       *rand.Rand
@@ -37,22 +39,24 @@ type URLService struct {
 	batchTime  time.Duration // время ожидания накопления батча
 }
 
+// NewURLService создаёт сервис и запускает горутину обработки очереди удалений.
 func NewURLService(repo URLRepository) *URLService {
 	s := &URLService{
 		repo:       repo,
 		rand:       rand.New(rand.NewSource(time.Now().UnixNano())),
 		deleteChan: make(chan deleteTask, 100),
-		batchSize:  100,                    // обрабатываем до 100 URL за раз
-		batchTime:  10 * time.Millisecond,  // или каждые 10ms
+		batchSize:  100,                   // обрабатываем до 100 URL за раз
+		batchTime:  10 * time.Millisecond, // или каждые 10ms
 	}
-	
+
 	// Запускаем горутину для обработки удалений с батчингом
 	go s.processDeletes()
-	
+
 	return s
 }
 
-// ShortenURL создаёт короткий URL из оригинального
+// ShortenURL создаёт новую запись и возвращает короткий id (не полный URL).
+// При коллизии short_id повторяет попытки; repository.ErrConflict — если original_url уже есть (PostgreSQL).
 func (s *URLService) ShortenURL(originalURL, userID string) (string, error) {
 	const maxAttempts = 5
 
@@ -82,7 +86,7 @@ func (s *URLService) ShortenURL(originalURL, userID string) (string, error) {
 	return "", fmt.Errorf("failed to obtain unique id after %d attempts", maxAttempts)
 }
 
-// BatchShortenURL создаёт несколько коротких URL за одну операцию
+// BatchShortenURL атомарно сохраняет пакет ссылок (одна транзакция/операция в репозитории).
 func (s *URLService) BatchShortenURL(items []struct {
 	CorrelationID string
 	OriginalURL   string
@@ -106,7 +110,7 @@ func (s *URLService) BatchShortenURL(items []struct {
 		// Пытаемся сгенерировать уникальный ID
 		for range maxAttempts {
 			shortID = s.generateShortID()
-			
+
 			// Проверяем, что ID уникален в текущем батче
 			duplicate := false
 			for _, u := range urls {
@@ -115,7 +119,7 @@ func (s *URLService) BatchShortenURL(items []struct {
 					break
 				}
 			}
-			
+
 			if !duplicate {
 				generated = true
 				break
@@ -152,7 +156,7 @@ func (s *URLService) BatchShortenURL(items []struct {
 	return results, nil
 }
 
-// GetOriginalURL возвращает оригинальный URL по короткому идентификатору
+// GetOriginalURL возвращает оригинальный URL по короткому id или ошибку репозитория (в т.ч. удалено).
 func (s *URLService) GetOriginalURL(shortID string) (string, error) {
 	url, err := s.repo.FindByID(shortID)
 	if err != nil {
@@ -162,17 +166,17 @@ func (s *URLService) GetOriginalURL(shortID string) (string, error) {
 	return url.OriginalURL, nil
 }
 
-// FindByOriginalURL находит URL по оригинальному URL
+// FindByOriginalURL возвращает сохранённую запись по полному оригинальному URL.
 func (s *URLService) FindByOriginalURL(originalURL string) (*model.URL, error) {
 	return s.repo.FindByOriginalURL(originalURL)
 }
 
-// GetAllURLs возвращает все сохранённые URL
+// GetAllURLs возвращает все записи из хранилища (включая помеченные удалёнными — зависит от репозитория).
 func (s *URLService) GetAllURLs() ([]*model.URL, error) {
 	return s.repo.GetAll()
 }
 
-// GetUserURLs возвращает все URL конкретного пользователя
+// GetUserURLs возвращает неудалённые ссылки пользователя userID.
 func (s *URLService) GetUserURLs(userID string) ([]*model.URL, error) {
 	return s.repo.GetByUserID(userID)
 }
@@ -182,14 +186,14 @@ func (s *URLService) generateShortID() string {
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	const length = 8
 
-	b := make([]byte, length)
+	var b [length]byte
 	for i := range b {
 		b[i] = charset[s.rand.Intn(len(charset))]
 	}
-	return string(b)
+	return string(b[:])
 }
 
-// DeleteUserURLs добавляет задачу на удаление URL пользователя по списку коротких ID
+// DeleteUserURLs ставит в очередь мягкое удаление shortIDs для userID (обработка асинхронная).
 func (s *URLService) DeleteUserURLs(shortIDs []string, userID string) error {
 	if len(shortIDs) == 0 {
 		return nil
@@ -199,7 +203,7 @@ func (s *URLService) DeleteUserURLs(shortIDs []string, userID string) error {
 		shortIDs: shortIDs,
 		userID:   userID,
 	}
-	
+
 	// Неблокирующая отправка в канал (fan-in pattern)
 	select {
 	case s.deleteChan <- task:
@@ -210,7 +214,7 @@ func (s *URLService) DeleteUserURLs(shortIDs []string, userID string) error {
 			s.deleteChan <- task
 		}()
 	}
-	
+
 	return nil
 }
 
@@ -218,22 +222,22 @@ func (s *URLService) DeleteUserURLs(shortIDs []string, userID string) error {
 func (s *URLService) processDeletes() {
 	ticker := time.NewTicker(s.batchTime)
 	defer ticker.Stop()
-	
+
 	// Буфер для накопления задач по пользователям
 	userBatches := make(map[string][]string)
-	
+
 	for {
 		select {
 		case task := <-s.deleteChan:
 			// Добавляем URL в батч для этого пользователя
 			userBatches[task.userID] = append(userBatches[task.userID], task.shortIDs...)
-			
+
 			// Если батч достиг максимального размера - обрабатываем немедленно
 			if len(userBatches[task.userID]) >= s.batchSize {
 				s.flushUserBatch(task.userID, userBatches[task.userID])
 				delete(userBatches, task.userID)
 			}
-			
+
 		case <-ticker.C:
 			// По таймеру обрабатываем все накопленные батчи
 			for userID, shortIDs := range userBatches {
@@ -241,8 +245,8 @@ func (s *URLService) processDeletes() {
 					s.flushUserBatch(userID, shortIDs)
 				}
 			}
-			// Очищаем карту
-			userBatches = make(map[string][]string)
+			// Переиспользуем карту вместо новой аллокации на каждый тик
+			clear(userBatches)
 		}
 	}
 }
@@ -252,7 +256,7 @@ func (s *URLService) flushUserBatch(userID string, shortIDs []string) {
 	if len(shortIDs) == 0 {
 		return
 	}
-	
+
 	// Выполняем batch update в БД
 	s.repo.DeleteByIDs(shortIDs, userID)
 }
