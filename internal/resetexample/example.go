@@ -10,10 +10,10 @@ type Inner struct {
 // generate:reset
 type ResetableStruct struct {
 	// примитивы
-	I    int
-	F    float64
-	B    bool
-	Str  string
+	I   int
+	F   float64
+	B   bool
+	Str string
 
 	// указатели на примитивы — сбрасываются по значению (не nil)
 	StrP *string
