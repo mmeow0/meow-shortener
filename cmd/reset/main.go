@@ -75,8 +75,7 @@ func processDir(dir string) error {
 		return !strings.HasSuffix(n, "_test.go") && n != "reset.gen.go"
 	}, parser.ParseComments)
 	if err != nil {
-		// Пропускаем директории, которые не являются корректными Go-пакетами.
-		return nil
+		return fmt.Errorf("parse %s: %w", dir, err)
 	}
 
 	for pkgName, pkg := range pkgs {

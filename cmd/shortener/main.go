@@ -13,7 +13,7 @@ var (
 	buildCommit  string
 )
 
-func na(s string) string {
+func valueOrNA(s string) string {
 	if s == "" {
 		return "N/A"
 	}
@@ -21,9 +21,9 @@ func na(s string) string {
 }
 
 func main() {
-	fmt.Printf("Build version: %s\n", na(buildVersion))
-	fmt.Printf("Build date: %s\n", na(buildDate))
-	fmt.Printf("Build commit: %s\n", na(buildCommit))
+	fmt.Printf("Build version: %s\n", valueOrNA(buildVersion))
+	fmt.Printf("Build date: %s\n", valueOrNA(buildDate))
+	fmt.Printf("Build commit: %s\n", valueOrNA(buildCommit))
 
 	app, err := app.InitializeApp()
 	if err != nil {
