@@ -2,10 +2,19 @@
 package app
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/pprof"
 	"net/url"
+	"time"
 
 	"github.com/mmeow0/meow-shortener/internal/audit"
 	"github.com/mmeow0/meow-shortener/internal/config"
@@ -142,8 +151,83 @@ func (a *App) Run() error {
 		}()
 	}
 
-	a.logger.Info("Starting server", zap.String("address", a.cfg.ServerAddress))
+	a.logger.Info("Starting server", zap.String("address", a.cfg.ServerAddress), zap.Bool("https", a.cfg.EnableHTTPS))
+	if a.cfg.EnableHTTPS {
+		tlsConfig, err := newTLSConfig(a.cfg.ServerAddress)
+		if err != nil {
+			return fmt.Errorf("failed to initialize TLS config: %w", err)
+		}
+
+		listener, err := tls.Listen("tcp", a.cfg.ServerAddress, tlsConfig)
+		if err != nil {
+			return err
+		}
+		return http.Serve(listener, a.router)
+	}
+
 	return http.ListenAndServe(a.cfg.ServerAddress, a.router)
+}
+
+func newTLSConfig(addr string) (*tls.Config, error) {
+	cert, err := newSelfSignedCertificate(addr)
+	if err != nil {
+		return nil, err
+	}
+
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+	}, nil
+}
+
+func newSelfSignedCertificate(addr string) (tls.Certificate, error) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "localhost"
+	}
+
+	template := x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			CommonName: host,
+		},
+		NotBefore: time.Now(),
+		NotAfter:  time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:  x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{
+			x509.ExtKeyUsageServerAuth,
+		},
+		BasicConstraintsValid: true,
+	}
+
+	if ip := net.ParseIP(host); ip != nil {
+		template.IPAddresses = []net.IP{ip}
+	} else {
+		template.DNSNames = []string{host}
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+
+	return tls.X509KeyPair(certPEM, keyPEM)
 }
 
 // Close закрывает репозиторий и пул соединений БД (если были инициализированы).

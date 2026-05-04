@@ -40,17 +40,23 @@ type Config struct {
 
 	// Флаг включения debug/pprof эндпоинтов (по умолчанию выключены)
 	EnablePprof bool `env:"ENABLE_PPROF" envDefault:"false"`
+
+	// Флаг включения HTTPS-сервера
+	EnableHTTPS bool `env:"ENABLE_HTTPS" envDefault:"false"`
 }
+
+const defaultBaseURL = "http://localhost:8080"
 
 var (
 	flagServerAddress   = flag.String("a", "localhost:8080", "Адрес запуска HTTP-сервера")
-	flagBaseURL         = flag.String("b", "http://localhost:8080", "Базовый адрес сокращённого URL")
+	flagBaseURL         = flag.String("b", defaultBaseURL, "Базовый адрес сокращённого URL")
 	flagLogLevel        = flag.String("l", "FATAL", "Уровень логирования")
 	flagFileStoragePath = flag.String("f", "/tmp/short-url-db.json", "Путь к файлу для хранения URL")
 	flagServerPort      = flag.String("server-port", "", "Порт для запуска сервера")
 	flagDatabaseDSN     = flag.String("d", "", "Строка подключения к базе данных")
 	flagDatabaseDSNLong = flag.String("database-dsn", "", "Строка подключения к базе данных")
-	flagSecretKey       = flag.String("s", "", "Секретный ключ для подписи кук")
+	flagEnableHTTPS     = flag.Bool("s", false, "Включить HTTPS-сервер")
+	flagSecretKey       = flag.String("secret-key", "", "Секретный ключ для подписи кук")
 	flagAuditFile       = flag.String("audit-file", "", "Путь к файлу-приёмнику логов аудита (пусто — отключено)")
 	flagAuditURL        = flag.String("audit-url", "", "Полный URL удалённого приёмника аудита POST (пусто — отключено)")
 	flagEnablePprof     = flag.Bool("enable-pprof", false, "Включить debug/pprof сервер на 127.0.0.1:6060")
@@ -80,6 +86,7 @@ func NewConfig() (*Config, error) {
 		AuditFile:       *flagAuditFile,
 		AuditURL:        *flagAuditURL,
 		EnablePprof:     *flagEnablePprof,
+		EnableHTTPS:     *flagEnableHTTPS,
 	}
 
 	// Переменные окружения перезаписывают флаги, если они установлены
@@ -114,6 +121,13 @@ func NewConfig() (*Config, error) {
 		}
 		cfg.EnablePprof = enabled
 	}
+	if val, ok := os.LookupEnv("ENABLE_HTTPS"); ok {
+		enabled, err := strconv.ParseBool(val)
+		if err != nil {
+			return nil, fmt.Errorf("invalid ENABLE_HTTPS value %q: %w", val, err)
+		}
+		cfg.EnableHTTPS = enabled
+	}
 
 	// Если секретный ключ не задан, генерируем случайный
 	if cfg.SecretKey == "" {
@@ -130,9 +144,15 @@ func NewConfig() (*Config, error) {
 	if serverPort != "" {
 		cfg.ServerAddress = fmt.Sprintf("localhost:%s", serverPort)
 		// Обновляем BaseURL только если он имеет значение по умолчанию
-		if cfg.BaseURL == "http://localhost:8080" {
-			cfg.BaseURL = fmt.Sprintf("http://localhost:%s", serverPort)
+		if cfg.BaseURL == defaultBaseURL {
+			scheme := "http"
+			if cfg.EnableHTTPS {
+				scheme = "https"
+			}
+			cfg.BaseURL = fmt.Sprintf("%s://localhost:%s", scheme, serverPort)
 		}
+	} else if cfg.EnableHTTPS && cfg.BaseURL == defaultBaseURL {
+		cfg.BaseURL = "https://localhost:8080"
 	}
 
 	if err := cfg.validate(); err != nil {
