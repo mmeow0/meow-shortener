@@ -296,7 +296,16 @@ func (r *FileURLRepository) DeleteByIDs(shortIDs []string, userID string) error 
 // Close закрывает файл
 func (r *FileURLRepository) Close() error {
 	if r.file != nil {
-		return r.file.Close()
+		r.mu.Lock()
+		defer r.mu.Unlock()
+
+		if err := r.file.Sync(); err != nil {
+			return fmt.Errorf("failed to sync file: %w", err)
+		}
+		if err := r.file.Close(); err != nil {
+			return fmt.Errorf("failed to close file: %w", err)
+		}
+		r.file = nil
 	}
 	return nil
 }

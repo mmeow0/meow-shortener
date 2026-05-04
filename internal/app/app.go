@@ -2,12 +2,14 @@
 package app
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"net"
@@ -129,8 +131,9 @@ func maskDSN(dsn string) string {
 	return u.String()
 }
 
-// Run слушает a.cfg.ServerAddress и опционально поднимает pprof на 127.0.0.1:6060.
-func (a *App) Run() error {
+// Run слушает a.cfg.ServerAddress до отмены ctx и штатно завершает сервер.
+func (a *App) Run(ctx context.Context) error {
+	var pprofServer *http.Server
 	if a.cfg.EnablePprof {
 		pprofMux := http.NewServeMux()
 		pprofMux.HandleFunc("/debug/pprof/", pprof.Index)
@@ -142,14 +145,25 @@ func (a *App) Run() error {
 		pprofMux.Handle("/debug/pprof/goroutine", pprof.Handler("goroutine"))
 		pprofMux.Handle("/debug/pprof/allocs", pprof.Handler("allocs"))
 
+		const addr = "127.0.0.1:6060"
+		pprofServer = &http.Server{
+			Addr:    addr,
+			Handler: pprofMux,
+		}
+
 		go func() {
-			const addr = "127.0.0.1:6060"
 			a.logger.Info("pprof server started", zap.String("addr", addr), zap.String("heap", "http://"+addr+"/debug/pprof/heap"))
-			if err := http.ListenAndServe(addr, pprofMux); err != nil {
+			if err := pprofServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				a.logger.Error("pprof server stopped", zap.Error(err))
 			}
 		}()
 	}
+
+	server := &http.Server{
+		Addr:    a.cfg.ServerAddress,
+		Handler: a.router,
+	}
+	errCh := make(chan error, 1)
 
 	a.logger.Info("Starting server", zap.String("address", a.cfg.ServerAddress), zap.Bool("https", a.cfg.EnableHTTPS))
 	if a.cfg.EnableHTTPS {
@@ -162,10 +176,42 @@ func (a *App) Run() error {
 		if err != nil {
 			return err
 		}
-		return http.Serve(listener, a.router)
+
+		go func() {
+			errCh <- server.Serve(listener)
+		}()
+	} else {
+		go func() {
+			errCh <- server.ListenAndServe()
+		}()
 	}
 
-	return http.ListenAndServe(a.cfg.ServerAddress, a.router)
+	select {
+	case <-ctx.Done():
+		a.logger.Info("Shutting down server")
+		return a.shutdownServers(server, pprofServer)
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
+	}
+}
+
+func (a *App) shutdownServers(server *http.Server, pprofServer *http.Server) error {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		return fmt.Errorf("failed to shutdown server: %w", err)
+	}
+	if pprofServer != nil {
+		if err := pprofServer.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("failed to shutdown pprof server: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func newTLSConfig(addr string) (*tls.Config, error) {
