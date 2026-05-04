@@ -4,6 +4,7 @@ package config
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -15,34 +16,34 @@ import (
 // Config описывает параметры запуска бинарника shortener.
 type Config struct {
 	// Адрес запуска HTTP-сервера
-	ServerAddress string `env:"SERVER_ADDRESS" envDefault:"localhost:8080"`
+	ServerAddress string `env:"SERVER_ADDRESS" envDefault:"localhost:8080" json:"server_address"`
 
 	// Базовый адрес результирующего сокращённого URL
-	BaseURL string `env:"BASE_URL" envDefault:"http://localhost:8080"`
+	BaseURL string `env:"BASE_URL" envDefault:"http://localhost:8080" json:"base_url"`
 
 	// Уровень логирования
-	LogLevel string `env:"LOG_LEVEL" envDefault:"FATAL"`
+	LogLevel string `env:"LOG_LEVEL" envDefault:"FATAL" json:"log_level"`
 
 	// Путь к файлу для хранения URL
-	FileStoragePath string `env:"FILE_STORAGE_PATH" envDefault:"/tmp/short-url-db.json"`
+	FileStoragePath string `env:"FILE_STORAGE_PATH" envDefault:"/tmp/short-url-db.json" json:"file_storage_path"`
 
 	// Строка подключения к базе данных PostgreSQL
-	DatabaseDSN string `env:"DATABASE_DSN"`
+	DatabaseDSN string `env:"DATABASE_DSN" json:"database_dsn"`
 
 	// Секретный ключ для подписи кук
-	SecretKey string `env:"SECRET_KEY"`
+	SecretKey string `env:"SECRET_KEY" json:"secret_key"`
 
 	// Путь к файлу логов аудита (пусто — запись в файл отключена)
-	AuditFile string `env:"AUDIT_FILE"`
+	AuditFile string `env:"AUDIT_FILE" json:"audit_file"`
 
 	// URL удалённого приёмника аудита POST (пусто — отправка отключена)
-	AuditURL string `env:"AUDIT_URL"`
+	AuditURL string `env:"AUDIT_URL" json:"audit_url"`
 
 	// Флаг включения debug/pprof эндпоинтов (по умолчанию выключены)
-	EnablePprof bool `env:"ENABLE_PPROF" envDefault:"false"`
+	EnablePprof bool `env:"ENABLE_PPROF" envDefault:"false" json:"enable_pprof"`
 
 	// Флаг включения HTTPS-сервера
-	EnableHTTPS bool `env:"ENABLE_HTTPS" envDefault:"false"`
+	EnableHTTPS bool `env:"ENABLE_HTTPS" envDefault:"false" json:"enable_https"`
 }
 
 const defaultBaseURL = "http://localhost:8080"
@@ -57,6 +58,8 @@ var (
 	flagDatabaseDSNLong = flag.String("database-dsn", "", "Строка подключения к базе данных")
 	flagEnableHTTPS     = flag.Bool("s", false, "Включить HTTPS-сервер")
 	flagSecretKey       = flag.String("secret-key", "", "Секретный ключ для подписи кук")
+	flagConfigPath      = flag.String("c", "", "Путь к JSON-файлу конфигурации")
+	flagConfigPathLong  = flag.String("config", "", "Путь к JSON-файлу конфигурации")
 	flagAuditFile       = flag.String("audit-file", "", "Путь к файлу-приёмнику логов аудита (пусто — отключено)")
 	flagAuditURL        = flag.String("audit-url", "", "Полный URL удалённого приёмника аудита POST (пусто — отключено)")
 	flagEnablePprof     = flag.Bool("enable-pprof", false, "Включить debug/pprof сервер на 127.0.0.1:6060")
@@ -70,24 +73,24 @@ func NewConfig() (*Config, error) {
 		flag.Parse()
 	}
 
-	// Для DatabaseDSN проверяем оба флага (короткий и длинный)
-	databaseDSN := *flagDatabaseDSN
-	if *flagDatabaseDSNLong != "" {
-		databaseDSN = *flagDatabaseDSNLong
+	setFlags := visitedFlags()
+
+	cfg := defaultConfig()
+	serverPort := ""
+
+	configPath := configPathFromFlags(setFlags)
+	if val, ok := os.LookupEnv("CONFIG"); ok {
+		configPath = val
+	}
+	if configPath != "" {
+		fileServerPort, err := loadConfigFile(configPath, cfg)
+		if err != nil {
+			return nil, err
+		}
+		serverPort = fileServerPort
 	}
 
-	cfg := &Config{
-		ServerAddress:   *flagServerAddress,
-		BaseURL:         *flagBaseURL,
-		LogLevel:        *flagLogLevel,
-		FileStoragePath: *flagFileStoragePath,
-		DatabaseDSN:     databaseDSN,
-		SecretKey:       *flagSecretKey,
-		AuditFile:       *flagAuditFile,
-		AuditURL:        *flagAuditURL,
-		EnablePprof:     *flagEnablePprof,
-		EnableHTTPS:     *flagEnableHTTPS,
-	}
+	applyFlags(cfg, setFlags)
 
 	// Переменные окружения перезаписывают флаги, если они установлены
 	if val, ok := os.LookupEnv("SERVER_ADDRESS"); ok {
@@ -129,15 +132,17 @@ func NewConfig() (*Config, error) {
 		cfg.EnableHTTPS = enabled
 	}
 
+	// Обработка SERVER_PORT - если задан, он перезаписывает ServerAddress и BaseURL
+	if flagWasSet(setFlags, "server-port") {
+		serverPort = *flagServerPort
+	}
+	if port, ok := os.LookupEnv("SERVER_PORT"); ok {
+		serverPort = port
+	}
+
 	// Если секретный ключ не задан, генерируем случайный
 	if cfg.SecretKey == "" {
 		cfg.SecretKey = generateSecretKey()
-	}
-
-	// Обработка SERVER_PORT - если задан, он перезаписывает ServerAddress и BaseURL
-	serverPort := *flagServerPort
-	if port, ok := os.LookupEnv("SERVER_PORT"); ok {
-		serverPort = port
 	}
 
 	// Если указан serverPort (из флага или переменной окружения), он перезаписывает ServerAddress и BaseURL
@@ -160,6 +165,94 @@ func NewConfig() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func defaultConfig() *Config {
+	return &Config{
+		ServerAddress:   "localhost:8080",
+		BaseURL:         defaultBaseURL,
+		LogLevel:        "FATAL",
+		FileStoragePath: "/tmp/short-url-db.json",
+	}
+}
+
+func loadConfigFile(path string, cfg *Config) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to read config file %q: %w", path, err)
+	}
+
+	fileCfg := struct {
+		*Config
+		ServerPort string `json:"server_port"`
+	}{
+		Config: cfg,
+	}
+
+	if err := json.Unmarshal(data, &fileCfg); err != nil {
+		return "", fmt.Errorf("failed to parse config file %q: %w", path, err)
+	}
+
+	return fileCfg.ServerPort, nil
+}
+
+func visitedFlags() map[string]bool {
+	setFlags := make(map[string]bool)
+	flag.Visit(func(f *flag.Flag) {
+		setFlags[f.Name] = true
+	})
+	return setFlags
+}
+
+func flagWasSet(setFlags map[string]bool, name string) bool {
+	return setFlags[name]
+}
+
+func configPathFromFlags(setFlags map[string]bool) string {
+	configPath := ""
+	if flagWasSet(setFlags, "c") {
+		configPath = *flagConfigPath
+	}
+	if flagWasSet(setFlags, "config") {
+		configPath = *flagConfigPathLong
+	}
+	return configPath
+}
+
+func applyFlags(cfg *Config, setFlags map[string]bool) {
+	if flagWasSet(setFlags, "a") {
+		cfg.ServerAddress = *flagServerAddress
+	}
+	if flagWasSet(setFlags, "b") {
+		cfg.BaseURL = *flagBaseURL
+	}
+	if flagWasSet(setFlags, "l") {
+		cfg.LogLevel = *flagLogLevel
+	}
+	if flagWasSet(setFlags, "f") {
+		cfg.FileStoragePath = *flagFileStoragePath
+	}
+	if flagWasSet(setFlags, "d") {
+		cfg.DatabaseDSN = *flagDatabaseDSN
+	}
+	if flagWasSet(setFlags, "database-dsn") {
+		cfg.DatabaseDSN = *flagDatabaseDSNLong
+	}
+	if flagWasSet(setFlags, "s") {
+		cfg.EnableHTTPS = *flagEnableHTTPS
+	}
+	if flagWasSet(setFlags, "secret-key") {
+		cfg.SecretKey = *flagSecretKey
+	}
+	if flagWasSet(setFlags, "audit-file") {
+		cfg.AuditFile = *flagAuditFile
+	}
+	if flagWasSet(setFlags, "audit-url") {
+		cfg.AuditURL = *flagAuditURL
+	}
+	if flagWasSet(setFlags, "enable-pprof") {
+		cfg.EnablePprof = *flagEnablePprof
+	}
 }
 
 func (c *Config) validate() error {
