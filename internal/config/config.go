@@ -11,42 +11,56 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"time"
 )
 
 // Config описывает параметры запуска бинарника shortener.
 type Config struct {
-	// Адрес запуска HTTP-сервера
-	ServerAddress string `env:"SERVER_ADDRESS" envDefault:"localhost:8080" json:"server_address"`
+	Server    ServerConfig    `json:"server"`
+	Storage   StorageConfig   `json:"storage"`
+	Logging   LoggingConfig   `json:"logging"`
+	Security  SecurityConfig  `json:"security"`
+	Audit     AuditConfig     `json:"audit"`
+	Profiling ProfilingConfig `json:"profiling"`
+}
 
-	// Базовый адрес результирующего сокращённого URL
-	BaseURL string `env:"BASE_URL" envDefault:"http://localhost:8080" json:"base_url"`
+// ServerConfig описывает сетевые настройки HTTP-сервера.
+type ServerConfig struct {
+	Address     string        `json:"address"`
+	BaseURL     string        `json:"base_url"`
+	EnableHTTPS bool          `json:"enable_https"`
+	Timeout     time.Duration `json:"-"`
+}
 
-	// Уровень логирования
-	LogLevel string `env:"LOG_LEVEL" envDefault:"FATAL" json:"log_level"`
+// StorageConfig описывает настройки хранилища.
+type StorageConfig struct {
+	FileStoragePath string `json:"file_storage_path"`
+	DatabaseDSN     string `json:"database_dsn"`
+}
 
-	// Путь к файлу для хранения URL
-	FileStoragePath string `env:"FILE_STORAGE_PATH" envDefault:"/tmp/short-url-db.json" json:"file_storage_path"`
+// LoggingConfig описывает параметры логирования.
+type LoggingConfig struct {
+	Level string `json:"log_level"`
+}
 
-	// Строка подключения к базе данных PostgreSQL
-	DatabaseDSN string `env:"DATABASE_DSN" json:"database_dsn"`
+// SecurityConfig описывает параметры безопасности.
+type SecurityConfig struct {
+	SecretKey string `json:"secret_key"`
+}
 
-	// Секретный ключ для подписи кук
-	SecretKey string `env:"SECRET_KEY" json:"secret_key"`
+// AuditConfig описывает настройки аудита.
+type AuditConfig struct {
+	File string `json:"file"`
+	URL  string `json:"url"`
+}
 
-	// Путь к файлу логов аудита (пусто — запись в файл отключена)
-	AuditFile string `env:"AUDIT_FILE" json:"audit_file"`
-
-	// URL удалённого приёмника аудита POST (пусто — отправка отключена)
-	AuditURL string `env:"AUDIT_URL" json:"audit_url"`
-
-	// Флаг включения debug/pprof эндпоинтов (по умолчанию выключены)
-	EnablePprof bool `env:"ENABLE_PPROF" envDefault:"false" json:"enable_pprof"`
-
-	// Флаг включения HTTPS-сервера
-	EnableHTTPS bool `env:"ENABLE_HTTPS" envDefault:"false" json:"enable_https"`
+// ProfilingConfig описывает отладочные настройки.
+type ProfilingConfig struct {
+	EnablePprof bool `json:"enable_pprof"`
 }
 
 const defaultBaseURL = "http://localhost:8080"
+const defaultServerTimeout = 10 * time.Second
 
 var (
 	flagServerAddress   = flag.String("a", "localhost:8080", "Адрес запуска HTTP-сервера")
@@ -57,6 +71,7 @@ var (
 	flagDatabaseDSN     = flag.String("d", "", "Строка подключения к базе данных")
 	flagDatabaseDSNLong = flag.String("database-dsn", "", "Строка подключения к базе данных")
 	flagEnableHTTPS     = flag.Bool("s", false, "Включить HTTPS-сервер")
+	flagServerTimeout   = flag.Duration("server-timeout", defaultServerTimeout, "Таймаут HTTP-сервера")
 	flagSecretKey       = flag.String("secret-key", "", "Секретный ключ для подписи кук")
 	flagConfigPath      = flag.String("c", "", "Путь к JSON-файлу конфигурации")
 	flagConfigPathLong  = flag.String("config", "", "Путь к JSON-файлу конфигурации")
@@ -94,42 +109,49 @@ func NewConfig() (*Config, error) {
 
 	// Переменные окружения перезаписывают флаги, если они установлены
 	if val, ok := os.LookupEnv("SERVER_ADDRESS"); ok {
-		cfg.ServerAddress = val
+		cfg.Server.Address = val
 	}
 	if val, ok := os.LookupEnv("BASE_URL"); ok {
-		cfg.BaseURL = val
+		cfg.Server.BaseURL = val
 	}
 	if val, ok := os.LookupEnv("LOG_LEVEL"); ok {
-		cfg.LogLevel = val
+		cfg.Logging.Level = val
 	}
 	if val, ok := os.LookupEnv("FILE_STORAGE_PATH"); ok {
-		cfg.FileStoragePath = val
+		cfg.Storage.FileStoragePath = val
 	}
 	if val, ok := os.LookupEnv("DATABASE_DSN"); ok {
-		cfg.DatabaseDSN = val
+		cfg.Storage.DatabaseDSN = val
 	}
 	if val, ok := os.LookupEnv("SECRET_KEY"); ok {
-		cfg.SecretKey = val
+		cfg.Security.SecretKey = val
 	}
 	if val, ok := os.LookupEnv("AUDIT_FILE"); ok {
-		cfg.AuditFile = val
+		cfg.Audit.File = val
 	}
 	if val, ok := os.LookupEnv("AUDIT_URL"); ok {
-		cfg.AuditURL = val
+		cfg.Audit.URL = val
 	}
 	if val, ok := os.LookupEnv("ENABLE_PPROF"); ok {
 		enabled, err := strconv.ParseBool(val)
 		if err != nil {
 			return nil, fmt.Errorf("invalid ENABLE_PPROF value %q: %w", val, err)
 		}
-		cfg.EnablePprof = enabled
+		cfg.Profiling.EnablePprof = enabled
 	}
 	if val, ok := os.LookupEnv("ENABLE_HTTPS"); ok {
 		enabled, err := strconv.ParseBool(val)
 		if err != nil {
 			return nil, fmt.Errorf("invalid ENABLE_HTTPS value %q: %w", val, err)
 		}
-		cfg.EnableHTTPS = enabled
+		cfg.Server.EnableHTTPS = enabled
+	}
+	if val, ok := os.LookupEnv("SERVER_TIMEOUT"); ok {
+		timeout, err := time.ParseDuration(val)
+		if err != nil {
+			return nil, fmt.Errorf("invalid SERVER_TIMEOUT value %q: %w", val, err)
+		}
+		cfg.Server.Timeout = timeout
 	}
 
 	// Обработка SERVER_PORT - если задан, он перезаписывает ServerAddress и BaseURL
@@ -141,23 +163,23 @@ func NewConfig() (*Config, error) {
 	}
 
 	// Если секретный ключ не задан, генерируем случайный
-	if cfg.SecretKey == "" {
-		cfg.SecretKey = generateSecretKey()
+	if cfg.Security.SecretKey == "" {
+		cfg.Security.SecretKey = generateSecretKey()
 	}
 
 	// Если указан serverPort (из флага или переменной окружения), он перезаписывает ServerAddress и BaseURL
 	if serverPort != "" {
-		cfg.ServerAddress = fmt.Sprintf("localhost:%s", serverPort)
+		cfg.Server.Address = fmt.Sprintf("localhost:%s", serverPort)
 		// Обновляем BaseURL только если он имеет значение по умолчанию
-		if cfg.BaseURL == defaultBaseURL {
+		if cfg.Server.BaseURL == defaultBaseURL {
 			scheme := "http"
-			if cfg.EnableHTTPS {
+			if cfg.Server.EnableHTTPS {
 				scheme = "https"
 			}
-			cfg.BaseURL = fmt.Sprintf("%s://localhost:%s", scheme, serverPort)
+			cfg.Server.BaseURL = fmt.Sprintf("%s://localhost:%s", scheme, serverPort)
 		}
-	} else if cfg.EnableHTTPS && cfg.BaseURL == defaultBaseURL {
-		cfg.BaseURL = "https://localhost:8080"
+	} else if cfg.Server.EnableHTTPS && cfg.Server.BaseURL == defaultBaseURL {
+		cfg.Server.BaseURL = "https://localhost:8080"
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -169,10 +191,17 @@ func NewConfig() (*Config, error) {
 
 func defaultConfig() *Config {
 	return &Config{
-		ServerAddress:   "localhost:8080",
-		BaseURL:         defaultBaseURL,
-		LogLevel:        "FATAL",
-		FileStoragePath: "/tmp/short-url-db.json",
+		Server: ServerConfig{
+			Address: "localhost:8080",
+			BaseURL: defaultBaseURL,
+			Timeout: defaultServerTimeout,
+		},
+		Storage: StorageConfig{
+			FileStoragePath: "/tmp/short-url-db.json",
+		},
+		Logging: LoggingConfig{
+			Level: "FATAL",
+		},
 	}
 }
 
@@ -183,11 +212,42 @@ func loadConfigFile(path string, cfg *Config) (string, error) {
 	}
 
 	fileCfg := struct {
-		*Config
-		ServerPort string `json:"server_port"`
-	}{
-		Config: cfg,
-	}
+		Server *struct {
+			Address     string `json:"address"`
+			BaseURL     string `json:"base_url"`
+			EnableHTTPS *bool  `json:"enable_https"`
+			Timeout     string `json:"timeout"`
+		} `json:"server"`
+		Storage *struct {
+			FileStoragePath string `json:"file_storage_path"`
+			DatabaseDSN     string `json:"database_dsn"`
+		} `json:"storage"`
+		Logging *struct {
+			Level string `json:"log_level"`
+		} `json:"logging"`
+		Security *struct {
+			SecretKey string `json:"secret_key"`
+		} `json:"security"`
+		Audit *struct {
+			File string `json:"file"`
+			URL  string `json:"url"`
+		} `json:"audit"`
+		Profiling *struct {
+			EnablePprof *bool `json:"enable_pprof"`
+		} `json:"profiling"`
+		ServerAddress   string `json:"server_address"`
+		BaseURL         string `json:"base_url"`
+		LogLevel        string `json:"log_level"`
+		FileStoragePath string `json:"file_storage_path"`
+		DatabaseDSN     string `json:"database_dsn"`
+		SecretKey       string `json:"secret_key"`
+		AuditFile       string `json:"audit_file"`
+		AuditURL        string `json:"audit_url"`
+		EnablePprof     *bool  `json:"enable_pprof"`
+		EnableHTTPS     *bool  `json:"enable_https"`
+		ServerTimeout   string `json:"server_timeout"`
+		ServerPort      string `json:"server_port"`
+	}{}
 
 	if err := json.Unmarshal(data, &fileCfg); err != nil {
 		return "", fmt.Errorf("failed to parse config file %q: %w", path, err)
@@ -221,50 +281,53 @@ func configPathFromFlags(setFlags map[string]bool) string {
 
 func applyFlags(cfg *Config, setFlags map[string]bool) {
 	if flagWasSet(setFlags, "a") {
-		cfg.ServerAddress = *flagServerAddress
+		cfg.Server.Address = *flagServerAddress
 	}
 	if flagWasSet(setFlags, "b") {
-		cfg.BaseURL = *flagBaseURL
+		cfg.Server.BaseURL = *flagBaseURL
 	}
 	if flagWasSet(setFlags, "l") {
-		cfg.LogLevel = *flagLogLevel
+		cfg.Logging.Level = *flagLogLevel
 	}
 	if flagWasSet(setFlags, "f") {
-		cfg.FileStoragePath = *flagFileStoragePath
+		cfg.Storage.FileStoragePath = *flagFileStoragePath
 	}
 	if flagWasSet(setFlags, "d") {
-		cfg.DatabaseDSN = *flagDatabaseDSN
+		cfg.Storage.DatabaseDSN = *flagDatabaseDSN
 	}
 	if flagWasSet(setFlags, "database-dsn") {
-		cfg.DatabaseDSN = *flagDatabaseDSNLong
+		cfg.Storage.DatabaseDSN = *flagDatabaseDSNLong
 	}
 	if flagWasSet(setFlags, "s") {
-		cfg.EnableHTTPS = *flagEnableHTTPS
+		cfg.Server.EnableHTTPS = *flagEnableHTTPS
+	}
+	if flagWasSet(setFlags, "server-timeout") {
+		cfg.Server.Timeout = *flagServerTimeout
 	}
 	if flagWasSet(setFlags, "secret-key") {
-		cfg.SecretKey = *flagSecretKey
+		cfg.Security.SecretKey = *flagSecretKey
 	}
 	if flagWasSet(setFlags, "audit-file") {
-		cfg.AuditFile = *flagAuditFile
+		cfg.Audit.File = *flagAuditFile
 	}
 	if flagWasSet(setFlags, "audit-url") {
-		cfg.AuditURL = *flagAuditURL
+		cfg.Audit.URL = *flagAuditURL
 	}
 	if flagWasSet(setFlags, "enable-pprof") {
-		cfg.EnablePprof = *flagEnablePprof
+		cfg.Profiling.EnablePprof = *flagEnablePprof
 	}
 }
 
 func (c *Config) validate() error {
-	if c.ServerAddress == "" {
+	if c.Server.Address == "" {
 		return errors.New("server address is empty")
 	}
 
-	if c.BaseURL == "" {
+	if c.Server.BaseURL == "" {
 		return errors.New("base URL is empty")
 	}
 
-	parsedURL, err := url.Parse(c.BaseURL)
+	parsedURL, err := url.Parse(c.Server.BaseURL)
 	if err != nil {
 		return errors.New("base URL is invalid")
 	}
@@ -273,8 +336,12 @@ func (c *Config) validate() error {
 		return errors.New("base URL must contain scheme and host")
 	}
 
-	if c.FileStoragePath == "" {
+	if c.Storage.FileStoragePath == "" {
 		return errors.New("file storage path is empty")
+	}
+
+	if c.Server.Timeout <= 0 {
+		return errors.New("server timeout must be positive")
 	}
 
 	return nil

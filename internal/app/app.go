@@ -47,7 +47,7 @@ func InitializeApp() (*App, error) {
 	}
 
 	// Создаём логгер
-	log, err := logger.NewLogger(cfg.LogLevel)
+	log, err := logger.NewLogger(cfg.Logging.Level)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize logger: %w", err)
 	}
@@ -57,9 +57,9 @@ func InitializeApp() (*App, error) {
 	var urlRepo service.URLRepository
 
 	// Приоритет хранилищ: БД > Файл > Память
-	if cfg.DatabaseDSN != "" {
+	if cfg.Storage.DatabaseDSN != "" {
 		// Используем PostgreSQL
-		db, err = database.NewDB(cfg.DatabaseDSN)
+		db, err = database.NewDB(cfg.Storage.DatabaseDSN)
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize database: %w", err)
 		}
@@ -71,14 +71,14 @@ func InitializeApp() (*App, error) {
 		}
 
 		urlRepo = repository.NewPostgresURLRepository(db.DB)
-		log.Info("Using PostgreSQL storage", zap.String("dsn", maskDSN(cfg.DatabaseDSN)))
-	} else if cfg.FileStoragePath != "" {
+		log.Info("Using PostgreSQL storage", zap.String("dsn", maskDSN(cfg.Storage.DatabaseDSN)))
+	} else if cfg.Storage.FileStoragePath != "" {
 		// Используем файловое хранилище
-		urlRepo, err = repository.NewFileURLRepository(cfg.FileStoragePath)
+		urlRepo, err = repository.NewFileURLRepository(cfg.Storage.FileStoragePath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize a URL file repository: %w", err)
 		}
-		log.Info("Using file storage", zap.String("path", cfg.FileStoragePath))
+		log.Info("Using file storage", zap.String("path", cfg.Storage.FileStoragePath))
 	} else {
 		// Используем in-memory хранилище
 		urlRepo = repository.NewInMemoryURLRepository()
@@ -88,22 +88,22 @@ func InitializeApp() (*App, error) {
 	urlService := service.NewURLService(urlRepo)
 
 	var auditObservers []audit.Observer
-	if cfg.AuditFile != "" {
-		auditObservers = append(auditObservers, audit.NewFileObserver(cfg.AuditFile))
-		log.Info("Audit file sink enabled", zap.String("path", cfg.AuditFile))
+	if cfg.Audit.File != "" {
+		auditObservers = append(auditObservers, audit.NewFileObserver(cfg.Audit.File))
+		log.Info("Audit file sink enabled", zap.String("path", cfg.Audit.File))
 	}
-	if cfg.AuditURL != "" {
-		auditObservers = append(auditObservers, audit.NewHTTPObserver(cfg.AuditURL))
-		log.Info("Audit HTTP sink enabled", zap.String("url", cfg.AuditURL))
+	if cfg.Audit.URL != "" {
+		auditObservers = append(auditObservers, audit.NewHTTPObserver(cfg.Audit.URL))
+		log.Info("Audit HTTP sink enabled", zap.String("url", cfg.Audit.URL))
 	}
 	var auditPublisher *audit.Publisher
 	if len(auditObservers) > 0 {
 		auditPublisher = audit.NewPublisher(auditObservers, log)
 	}
 
-	urlHandler := handler.NewURLHandler(urlService, cfg.BaseURL, log, auditPublisher)
+	urlHandler := handler.NewURLHandler(urlService, cfg.Server.BaseURL, log, auditPublisher)
 	pingHandler := handler.NewPingHandler(db, log)
-	rt := router.NewRouter(urlHandler, pingHandler, cfg.SecretKey, log)
+	rt := router.NewRouter(urlHandler, pingHandler, cfg.Security.SecretKey, log)
 
 	return &App{
 		cfg:    cfg,
@@ -131,10 +131,10 @@ func maskDSN(dsn string) string {
 	return u.String()
 }
 
-// Run слушает a.cfg.ServerAddress до отмены ctx и штатно завершает сервер.
+// Run слушает a.cfg.Server.Address до отмены ctx и штатно завершает сервер.
 func (a *App) Run(ctx context.Context) error {
 	var pprofServer *http.Server
-	if a.cfg.EnablePprof {
+	if a.cfg.Profiling.EnablePprof {
 		pprofMux := http.NewServeMux()
 		pprofMux.HandleFunc("/debug/pprof/", pprof.Index)
 		pprofMux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
@@ -160,19 +160,23 @@ func (a *App) Run(ctx context.Context) error {
 	}
 
 	server := &http.Server{
-		Addr:    a.cfg.ServerAddress,
-		Handler: a.router,
+		Addr:              a.cfg.Server.Address,
+		Handler:           a.router,
+		ReadHeaderTimeout: a.cfg.Server.Timeout,
+		ReadTimeout:       a.cfg.Server.Timeout,
+		WriteTimeout:      a.cfg.Server.Timeout,
+		IdleTimeout:       a.cfg.Server.Timeout * 2,
 	}
 	errCh := make(chan error, 1)
 
-	a.logger.Info("Starting server", zap.String("address", a.cfg.ServerAddress), zap.Bool("https", a.cfg.EnableHTTPS))
-	if a.cfg.EnableHTTPS {
-		tlsConfig, err := newTLSConfig(a.cfg.ServerAddress)
+	a.logger.Info("Starting server", zap.String("address", a.cfg.Server.Address), zap.Bool("https", a.cfg.Server.EnableHTTPS), zap.Duration("timeout", a.cfg.Server.Timeout))
+	if a.cfg.Server.EnableHTTPS {
+		tlsConfig, err := newTLSConfig(a.cfg.Server.Address)
 		if err != nil {
 			return fmt.Errorf("failed to initialize TLS config: %w", err)
 		}
 
-		listener, err := tls.Listen("tcp", a.cfg.ServerAddress, tlsConfig)
+		listener, err := tls.Listen("tcp", a.cfg.Server.Address, tlsConfig)
 		if err != nil {
 			return err
 		}
