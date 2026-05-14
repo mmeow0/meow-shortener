@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"os/signal"
+	"syscall"
 
 	"github.com/mmeow0/meow-shortener/internal/app"
 )
@@ -25,13 +28,16 @@ func main() {
 	fmt.Printf("Build date: %s\n", valueOrNA(buildDate))
 	fmt.Printf("Build commit: %s\n", valueOrNA(buildCommit))
 
-	app, err := app.InitializeApp()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT, syscall.SIGQUIT)
+	defer stop()
+
+	application, err := app.InitializeApp()
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer app.Close()
+	defer application.Close()
 
-	if err := app.Run(); err != nil {
+	if err := application.Run(ctx); err != nil {
 		log.Fatal(err)
 	}
 }

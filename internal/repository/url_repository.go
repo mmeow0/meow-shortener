@@ -26,14 +26,16 @@ var ErrDeleted = errors.New("url has been deleted")
 
 // InMemoryURLRepository — потокобезопасное хранилище в памяти (карта по short_id).
 type InMemoryURLRepository struct {
-	mu   sync.RWMutex
-	urls map[string]*model.URL // ключ - ShortURL
+	mu            sync.RWMutex
+	urls          map[string]*model.URL // ключ - ShortURL
+	originalIndex map[string]string     // ключ - OriginalURL, значение - ShortURL
 }
 
 // NewInMemoryURLRepository создаёт пустое in-memory хранилище.
 func NewInMemoryURLRepository() *InMemoryURLRepository {
 	return &InMemoryURLRepository{
-		urls: make(map[string]*model.URL),
+		urls:          make(map[string]*model.URL),
+		originalIndex: make(map[string]string),
 	}
 }
 
@@ -47,6 +49,7 @@ func (r *InMemoryURLRepository) Save(url *model.URL) error {
 	}
 
 	r.urls[url.ShortURL] = url
+	r.originalIndex[url.OriginalURL] = url.ShortURL
 	return nil
 }
 
@@ -65,6 +68,7 @@ func (r *InMemoryURLRepository) BatchSave(urls []*model.URL) error {
 	// Сохраняем все URL
 	for _, url := range urls {
 		r.urls[url.ShortURL] = url
+		r.originalIndex[url.OriginalURL] = url.ShortURL
 	}
 
 	return nil
@@ -92,13 +96,17 @@ func (r *InMemoryURLRepository) FindByOriginalURL(originalURL string) (*model.UR
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	for _, url := range r.urls {
-		if url.OriginalURL == originalURL {
-			return url, nil
-		}
+	shortURL, exists := r.originalIndex[originalURL]
+	if !exists {
+		return nil, ErrNotFound
 	}
 
-	return nil, ErrNotFound
+	url, exists := r.urls[shortURL]
+	if !exists {
+		return nil, ErrNotFound
+	}
+
+	return url, nil
 }
 
 // GetAll возвращает все URL из хранилища
@@ -202,6 +210,7 @@ func (r *FileURLRepository) loadFromFile() error {
 		}
 		// Используем прямой доступ к map, т.к. это загрузка при инициализации
 		r.InMemoryURLRepository.urls[url.ShortURL] = &url
+		r.InMemoryURLRepository.originalIndex[url.OriginalURL] = url.ShortURL
 	}
 
 	return scanner.Err()
@@ -222,6 +231,7 @@ func (r *FileURLRepository) Save(url *model.URL) error {
 		// Если не удалось записать в файл, нужно откатить изменения в памяти
 		r.InMemoryURLRepository.mu.Lock()
 		delete(r.InMemoryURLRepository.urls, url.ShortURL)
+		delete(r.InMemoryURLRepository.originalIndex, url.OriginalURL)
 		r.InMemoryURLRepository.mu.Unlock()
 		return fmt.Errorf("failed to write to file: %w", err)
 	}
@@ -246,6 +256,7 @@ func (r *FileURLRepository) BatchSave(urls []*model.URL) error {
 			r.InMemoryURLRepository.mu.Lock()
 			for _, u := range urls {
 				delete(r.InMemoryURLRepository.urls, u.ShortURL)
+				delete(r.InMemoryURLRepository.originalIndex, u.OriginalURL)
 			}
 			r.InMemoryURLRepository.mu.Unlock()
 			return fmt.Errorf("failed to write to file: %w", err)
@@ -296,7 +307,16 @@ func (r *FileURLRepository) DeleteByIDs(shortIDs []string, userID string) error 
 // Close закрывает файл
 func (r *FileURLRepository) Close() error {
 	if r.file != nil {
-		return r.file.Close()
+		r.mu.Lock()
+		defer r.mu.Unlock()
+
+		if err := r.file.Sync(); err != nil {
+			return fmt.Errorf("failed to sync file: %w", err)
+		}
+		if err := r.file.Close(); err != nil {
+			return fmt.Errorf("failed to close file: %w", err)
+		}
+		r.file = nil
 	}
 	return nil
 }
