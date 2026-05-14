@@ -3,6 +3,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -11,10 +12,10 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/mmeow0/meow-shortener/internal/audit"
+	"github.com/mmeow0/meow-shortener/internal/facade"
 	"github.com/mmeow0/meow-shortener/internal/middleware"
 	"github.com/mmeow0/meow-shortener/internal/model"
 	"github.com/mmeow0/meow-shortener/internal/repository"
@@ -25,9 +26,9 @@ import (
 // URLHandler обрабатывает HTTP-запросы к сервису сокращения ссылок.
 type URLHandler struct {
 	service       *service.URLService
+	facade        *facade.URLFacade
 	baseURL       string
 	logger        *zap.Logger
-	audit         *audit.Publisher
 	trustedSubnet *net.IPNet
 }
 
@@ -44,55 +45,17 @@ func NewURLHandler(service *service.URLService, baseURL string, trustedSubnet st
 
 	return &URLHandler{
 		service:       service,
+		facade:        facade.NewURLFacade(service, baseURL, auditPub),
 		baseURL:       baseURL,
 		logger:        logger,
-		audit:         auditPub,
 		trustedSubnet: subnet,
 	}
 }
 
-func (h *URLHandler) publishAudit(action, originalURL, userID string) {
-	if h.audit == nil {
-		return
-	}
-	h.audit.Publish(audit.Event{
-		TS:     time.Now().Unix(),
-		Action: action,
-		UserID: userID,
-		URL:    originalURL,
-	})
-}
-
 // shortenURL создаёт короткий URL с обработкой конфликтов
 // Возвращает: полный короткий URL, HTTP статус код (201 или 409), ошибку
-func (h *URLHandler) shortenURL(originalURL, userID string) (string, int, error) {
-	shortID, err := h.service.ShortenURL(originalURL, userID)
-	if err != nil {
-		// Проверяем, является ли это конфликтом
-		if errors.Is(err, repository.ErrConflict) {
-			// URL уже существует, находим существующий короткий URL
-			existingURL, findErr := h.service.FindByOriginalURL(originalURL)
-			if findErr != nil {
-				return "", 0, findErr
-			}
-
-			shortURL, joinErr := url.JoinPath(h.baseURL, existingURL.ShortURL)
-			if joinErr != nil {
-				return "", 0, joinErr
-			}
-
-			return shortURL, http.StatusConflict, nil
-		}
-		return "", 0, err
-	}
-
-	// Успешно создан новый URL
-	shortURL, err := url.JoinPath(h.baseURL, shortID)
-	if err != nil {
-		return "", 0, err
-	}
-
-	return shortURL, http.StatusCreated, nil
+func (h *URLHandler) shortenURL(reqCtx context.Context, originalURL, userID string) (string, int, error) {
+	return h.facade.ShortenURL(reqCtx, originalURL, userID)
 }
 
 // CreateShortURLPlain обрабатывает POST «/» с телом text/plain — одна строка с оригинальным URL.
@@ -115,7 +78,7 @@ func (h *URLHandler) CreateShortURLPlain(res http.ResponseWriter, req *http.Requ
 	userID := middleware.GetUserID(req.Context(), h.logger)
 
 	// Создаём короткий URL с обработкой конфликтов
-	shortURL, statusCode, err := h.shortenURL(originalURL, userID)
+	shortURL, statusCode, err := h.shortenURL(req.Context(), originalURL, userID)
 	if err != nil {
 		log.Printf("failed to shorten url %q: %v", originalURL, err)
 		res.WriteHeader(http.StatusInternalServerError)
@@ -126,9 +89,6 @@ func (h *URLHandler) CreateShortURLPlain(res http.ResponseWriter, req *http.Requ
 	res.WriteHeader(statusCode)
 	_, _ = io.WriteString(res, shortURL)
 
-	if statusCode == http.StatusCreated {
-		h.publishAudit(audit.ActionShorten, originalURL, userID)
-	}
 }
 
 // CreateShortURL обрабатывает POST «/api/shorten» с JSON model.ShortenRequest.
@@ -153,7 +113,7 @@ func (h *URLHandler) CreateShortURL(res http.ResponseWriter, req *http.Request) 
 	userID := middleware.GetUserID(req.Context(), h.logger)
 
 	// Создаём короткий URL с обработкой конфликтов
-	shortURL, statusCode, err := h.shortenURL(request.URL, userID)
+	shortURL, statusCode, err := h.shortenURL(req.Context(), request.URL, userID)
 	if err != nil {
 		log.Printf("failed to shorten url %q: %v", request.URL, err)
 		res.WriteHeader(http.StatusInternalServerError)
@@ -173,9 +133,6 @@ func (h *URLHandler) CreateShortURL(res http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	if statusCode == http.StatusCreated {
-		h.publishAudit(audit.ActionShorten, request.URL, userID)
-	}
 }
 
 // GetOriginalURL обрабатывает GET «/{id}»: редирект 307 Temporary Redirect с заголовком Location.
@@ -188,7 +145,8 @@ func (h *URLHandler) GetOriginalURL(res http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	originalURL, err := h.service.GetOriginalURL(shortID)
+	userID := middleware.GetUserID(req.Context(), h.logger)
+	originalURL, err := h.facade.ExpandURL(req.Context(), shortID, userID)
 	if err != nil {
 		if errors.Is(err, repository.ErrDeleted) {
 			// URL был удалён - возвращаем 410 Gone
@@ -206,9 +164,6 @@ func (h *URLHandler) GetOriginalURL(res http.ResponseWriter, req *http.Request) 
 
 	res.Header().Set("Location", originalURL)
 	res.WriteHeader(http.StatusTemporaryRedirect)
-
-	userID := middleware.GetUserID(req.Context(), h.logger)
-	h.publishAudit(audit.ActionFollow, originalURL, userID)
 }
 
 // GetUserURLs обрабатывает GET «/api/user/urls». Требуется валидная подписанная cookie user_id.
@@ -227,7 +182,7 @@ func (h *URLHandler) GetUserURLs(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	urls, err := h.service.GetUserURLs(userID)
+	urls, err := h.facade.ListUserURLs(req.Context(), userID)
 	if err != nil {
 		log.Printf("failed to get user urls: %v", err)
 		res.WriteHeader(http.StatusInternalServerError)
@@ -241,25 +196,11 @@ func (h *URLHandler) GetUserURLs(res http.ResponseWriter, req *http.Request) {
 	}
 
 	// Формируем ответ
-	response := make([]model.UserURLsResponse, 0, len(urls))
-	for _, u := range urls {
-		fullShortURL, err := url.JoinPath(h.baseURL, u.ShortURL)
-		if err != nil {
-			log.Printf("failed to join url path: %v", err)
-			continue
-		}
-
-		response = append(response, model.UserURLsResponse{
-			ShortURL:    fullShortURL,
-			OriginalURL: u.OriginalURL,
-		})
-	}
-
 	res.Header().Set("Content-Type", "application/json")
 	res.WriteHeader(http.StatusOK)
 
 	encoder := json.NewEncoder(res)
-	if err := encoder.Encode(response); err != nil {
+	if err := encoder.Encode(urls); err != nil {
 		log.Printf("failed to encode response: %v", err)
 	}
 }

@@ -16,23 +16,32 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/mmeow0/meow-shortener/internal/audit"
 	"github.com/mmeow0/meow-shortener/internal/config"
 	"github.com/mmeow0/meow-shortener/internal/database"
+	"github.com/mmeow0/meow-shortener/internal/facade"
+	"github.com/mmeow0/meow-shortener/internal/grpcserver"
 	"github.com/mmeow0/meow-shortener/internal/handler"
 	"github.com/mmeow0/meow-shortener/internal/logger"
+	"github.com/mmeow0/meow-shortener/internal/middleware"
+	"github.com/mmeow0/meow-shortener/internal/pb"
 	"github.com/mmeow0/meow-shortener/internal/repository"
 	"github.com/mmeow0/meow-shortener/internal/router"
 	"github.com/mmeow0/meow-shortener/internal/service"
 	"go.uber.org/zap"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
+	"google.golang.org/grpc"
 )
 
 // App держит зависимости запущенного сервера и реализует graceful закрытие ресурсов.
 type App struct {
 	cfg    *config.Config
 	router http.Handler
+	grpc   *grpc.Server
 	repo   service.URLRepository
 	db     *database.DB
 	logger *zap.Logger
@@ -101,13 +110,23 @@ func InitializeApp() (*App, error) {
 		auditPublisher = audit.NewPublisher(auditObservers, log)
 	}
 
+	authenticator := middleware.NewAuthenticator(cfg.Security.SecretKey, log)
+	urlFacade := facade.NewURLFacade(urlService, cfg.Server.BaseURL, auditPublisher)
 	urlHandler := handler.NewURLHandler(urlService, cfg.Server.BaseURL, cfg.Server.TrustedSubnet, log, auditPublisher)
 	pingHandler := handler.NewPingHandler(db, log)
 	rt := router.NewRouter(urlHandler, pingHandler, cfg.Security.SecretKey, log)
+	grpcSrv := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(
+			middleware.GRPCAuthInterceptor(authenticator),
+			middleware.TimeoutUnaryInterceptor(cfg.Server.Timeout),
+		),
+	)
+	pb.RegisterShortenerServiceServer(grpcSrv, grpcserver.New(urlFacade, log))
 
 	return &App{
 		cfg:    cfg,
 		router: rt,
+		grpc:   grpcSrv,
 		repo:   urlRepo,
 		db:     db,
 		logger: log,
@@ -161,7 +180,7 @@ func (a *App) Run(ctx context.Context) error {
 
 	server := &http.Server{
 		Addr:              a.cfg.Server.Address,
-		Handler:           a.router,
+		Handler:           a.serverHandler(),
 		ReadHeaderTimeout: a.cfg.Server.Timeout,
 		ReadTimeout:       a.cfg.Server.Timeout,
 		WriteTimeout:      a.cfg.Server.Timeout,
@@ -202,12 +221,42 @@ func (a *App) Run(ctx context.Context) error {
 	}
 }
 
+func (a *App) serverHandler() http.Handler {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ProtoMajor == 2 && strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
+			a.grpc.ServeHTTP(w, r)
+			return
+		}
+
+		a.router.ServeHTTP(w, r)
+	})
+
+	if a.cfg.Server.EnableHTTPS {
+		return handler
+	}
+
+	return h2c.NewHandler(handler, &http2.Server{})
+}
+
 func (a *App) shutdownServers(server *http.Server, pprofServer *http.Server) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("failed to shutdown server: %w", err)
+	}
+	if a.grpc != nil {
+		stopped := make(chan struct{})
+		go func() {
+			a.grpc.GracefulStop()
+			close(stopped)
+		}()
+
+		select {
+		case <-stopped:
+		case <-shutdownCtx.Done():
+			a.grpc.Stop()
+		}
 	}
 	if pprofServer != nil {
 		if err := pprofServer.Shutdown(shutdownCtx); err != nil {
