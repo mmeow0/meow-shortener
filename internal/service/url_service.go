@@ -181,6 +181,27 @@ func (s *URLService) GetUserURLs(userID string) ([]*model.URL, error) {
 	return s.repo.GetByUserID(userID)
 }
 
+// GetStats возвращает количество сокращённых URL и количество уникальных пользователей.
+func (s *URLService) GetStats() (model.StatsResponse, error) {
+	urls, err := s.repo.GetAll()
+	if err != nil {
+		return model.StatsResponse{}, err
+	}
+
+	users := make(map[string]struct{}, len(urls))
+	for _, item := range urls {
+		if item == nil || item.UserID == "" {
+			continue
+		}
+		users[item.UserID] = struct{}{}
+	}
+
+	return model.StatsResponse{
+		URLs:  len(urls),
+		Users: len(users),
+	}, nil
+}
+
 // generateShortID генерирует случайный короткий идентификатор
 func (s *URLService) generateShortID() string {
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"

@@ -8,6 +8,7 @@
 //   - GET /api/user/urls — список ссылок пользователя (требуется валидная cookie; 204 если пусто).
 //   - DELETE /api/user/urls — мягкое удаление по JSON-массиву коротких id или полных URL (202).
 //   - GET /{id} — редирект 307 на оригинальный URL (404, 410 если удалено).
+//   - GET /api/internal/stats — внутренняя статистика (200 только для X-Real-IP из trusted_subnet, иначе 403).
 //   - GET /ping — проверка БД (200 при успешном Ping, 500 при ошибке или отсутствии БД).
 package router
 
@@ -35,6 +36,7 @@ func NewRouter(urlHandler *handler.URLHandler, pingHandler *handler.PingHandler,
 	r.Post("/api/shorten/batch", urlHandler.CreateShortURLBatch)
 	r.Get("/api/user/urls", urlHandler.GetUserURLs)
 	r.Delete("/api/user/urls", urlHandler.DeleteUserURLs)
+	r.Get("/api/internal/stats", urlHandler.GetInternalStats)
 	r.Get("/ping", pingHandler.Ping)
 	r.Get("/{id}", urlHandler.GetOriginalURL)
 

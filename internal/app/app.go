@@ -101,7 +101,7 @@ func InitializeApp() (*App, error) {
 		auditPublisher = audit.NewPublisher(auditObservers, log)
 	}
 
-	urlHandler := handler.NewURLHandler(urlService, cfg.Server.BaseURL, log, auditPublisher)
+	urlHandler := handler.NewURLHandler(urlService, cfg.Server.BaseURL, cfg.Server.TrustedSubnet, log, auditPublisher)
 	pingHandler := handler.NewPingHandler(db, log)
 	rt := router.NewRouter(urlHandler, pingHandler, cfg.Security.SecretKey, log)
 

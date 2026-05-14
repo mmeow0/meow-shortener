@@ -26,6 +26,12 @@ type UserURLsResponse struct {
 	OriginalURL string `json:"original_url"`
 }
 
+// StatsResponse представляет ответ внутреннего эндпоинта статистики.
+type StatsResponse struct {
+	URLs  int `json:"urls"`
+	Users int `json:"users"`
+}
+
 // BatchShortenRequest представляет элемент батч-запроса для сокращения URL
 type BatchShortenRequest struct {
 	CorrelationID string `json:"correlation_id"` // Идентификатор для связи запроса и ответа

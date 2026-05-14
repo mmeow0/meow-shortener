@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -23,20 +24,30 @@ import (
 
 // URLHandler обрабатывает HTTP-запросы к сервису сокращения ссылок.
 type URLHandler struct {
-	service *service.URLService
-	baseURL string
-	logger  *zap.Logger
-	audit   *audit.Publisher
+	service       *service.URLService
+	baseURL       string
+	logger        *zap.Logger
+	audit         *audit.Publisher
+	trustedSubnet *net.IPNet
 }
 
 // NewURLHandler создаёт обработчик. baseURL — префикс публичных коротких ссылок (без завершающего «/»).
 // auditPub может быть nil, тогда события аудита не публикуются.
-func NewURLHandler(service *service.URLService, baseURL string, logger *zap.Logger, auditPub *audit.Publisher) *URLHandler {
+func NewURLHandler(service *service.URLService, baseURL string, trustedSubnet string, logger *zap.Logger, auditPub *audit.Publisher) *URLHandler {
+	var subnet *net.IPNet
+	if trustedSubnet != "" {
+		_, parsedSubnet, err := net.ParseCIDR(trustedSubnet)
+		if err == nil {
+			subnet = parsedSubnet
+		}
+	}
+
 	return &URLHandler{
-		service: service,
-		baseURL: baseURL,
-		logger:  logger,
-		audit:   auditPub,
+		service:       service,
+		baseURL:       baseURL,
+		logger:        logger,
+		audit:         auditPub,
+		trustedSubnet: subnet,
 	}
 }
 
@@ -251,6 +262,46 @@ func (h *URLHandler) GetUserURLs(res http.ResponseWriter, req *http.Request) {
 	if err := encoder.Encode(response); err != nil {
 		log.Printf("failed to encode response: %v", err)
 	}
+}
+
+// GetInternalStats обрабатывает GET /api/internal/stats и возвращает общую статистику сервиса.
+func (h *URLHandler) GetInternalStats(res http.ResponseWriter, req *http.Request) {
+	if !h.isTrustedRequest(req) {
+		res.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	stats, err := h.service.GetStats()
+	if err != nil {
+		h.logger.Error("failed to get internal stats", zap.Error(err))
+		res.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	res.Header().Set("Content-Type", "application/json")
+	res.WriteHeader(http.StatusOK)
+
+	if err := json.NewEncoder(res).Encode(stats); err != nil {
+		h.logger.Error("failed to encode internal stats response", zap.Error(err))
+	}
+}
+
+func (h *URLHandler) isTrustedRequest(req *http.Request) bool {
+	if h.trustedSubnet == nil {
+		return false
+	}
+
+	realIP := strings.TrimSpace(req.Header.Get("X-Real-IP"))
+	if realIP == "" {
+		return false
+	}
+
+	clientIP := net.ParseIP(realIP)
+	if clientIP == nil {
+		return false
+	}
+
+	return h.trustedSubnet.Contains(clientIP)
 }
 
 // DeleteUserURLs обрабатывает DELETE «/api/user/urls» с телом model.DeleteURLsRequest (JSON-массив строк).

@@ -33,7 +33,7 @@ func (benchNoopURLRepo) Close() error                             { return nil }
 func BenchmarkCreateShortURLPlain_chi(b *testing.B) {
 	log := zap.NewNop()
 	svc := service.NewURLService(benchNoopURLRepo{})
-	h := NewURLHandler(svc, "http://localhost:8080", log, nil)
+	h := NewURLHandler(svc, "http://localhost:8080", "", log, nil)
 
 	r := chi.NewRouter()
 	r.Use(middleware.GzipMiddleware)
@@ -55,7 +55,7 @@ func BenchmarkCreateShortURLPlain_chi(b *testing.B) {
 func BenchmarkCreateShortURL_JSON(b *testing.B) {
 	log := zap.NewNop()
 	svc := service.NewURLService(benchNoopURLRepo{})
-	h := NewURLHandler(svc, "http://localhost:8080", log, nil)
+	h := NewURLHandler(svc, "http://localhost:8080", "", log, nil)
 
 	r := chi.NewRouter()
 	r.Use(middleware.GzipMiddleware)
@@ -77,7 +77,7 @@ func BenchmarkCreateShortURL_JSON(b *testing.B) {
 func BenchmarkCreateShortURL_JSON_gzip(b *testing.B) {
 	log := zap.NewNop()
 	svc := service.NewURLService(benchNoopURLRepo{})
-	h := NewURLHandler(svc, "http://localhost:8080", log, nil)
+	h := NewURLHandler(svc, "http://localhost:8080", "", log, nil)
 
 	r := chi.NewRouter()
 	r.Use(middleware.GzipMiddleware)

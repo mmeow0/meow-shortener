@@ -32,7 +32,7 @@ func newPracticumServer() (*httptest.Server, error) {
 	log := zap.NewNop()
 	repo := repository.NewInMemoryURLRepository()
 	svc := service.NewURLService(repo)
-	urlH := handler.NewURLHandler(svc, baseURL, log, nil)
+	urlH := handler.NewURLHandler(svc, baseURL, "", log, nil)
 	pingH := handler.NewPingHandler(nil, log)
 	mux := router.NewRouter(urlH, pingH, "example-secret-for-docs", log)
 
