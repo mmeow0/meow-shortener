@@ -23,60 +23,89 @@ const (
 	validCookie contextKey = "validCookie"
 )
 
-// AuthMiddleware проверяет/создаёт cookie с ID пользователя
-func AuthMiddleware(secretKey string, logger *zap.Logger) func(next http.Handler) http.Handler {
+// Authenticator проверяет и выпускает пользовательские токены,
+// используемые в cookie HTTP и metadata gRPC.
+type Authenticator struct {
+	logger  *zap.Logger
+	macPool *sync.Pool
+}
+
+// NewAuthenticator создаёт Authenticator с HMAC-подписью на основе secretKey.
+func NewAuthenticator(secretKey string, logger *zap.Logger) *Authenticator {
 	key := []byte(secretKey)
-	macPool := &sync.Pool{
-		New: func() any {
-			return hmac.New(sha256.New, key)
+	return &Authenticator{
+		logger: logger,
+		macPool: &sync.Pool{
+			New: func() any {
+				return hmac.New(sha256.New, key)
+			},
 		},
 	}
+}
+
+// AuthMiddleware проверяет/создаёт cookie с ID пользователя
+func AuthMiddleware(secretKey string, logger *zap.Logger) func(next http.Handler) http.Handler {
+	authenticator := NewAuthenticator(secretKey, logger)
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Пытаемся получить cookie
+			token := ""
 			cookie, err := r.Cookie("user_id")
+			if err == nil {
+				token = cookie.Value
+			}
 
-			var userID string
-			var isValidCookie bool
-
-			if err != nil || cookie.Value == "" {
-				// Cookie нет, создаём новый ID пользователя
-				userID = generateUserID()
-				signedValue := signUserID(userID, macPool)
-
-				// Устанавливаем cookie
+			userID, signedValue, needsRefresh := authenticator.ResolveUser(token)
+			if needsRefresh {
 				http.SetCookie(w, &http.Cookie{
 					Name:  "user_id",
 					Value: signedValue,
 					Path:  "/",
 				})
-				isValidCookie = true
-			} else {
-				// Проверяем подпись cookie
-				userID, isValidCookie = verifySignedUserID(cookie.Value, macPool)
-
-				if !isValidCookie {
-					// Cookie невалидна, создаём новую
-					logger.Warn("invalid cookie signature, creating new user ID")
-					userID = generateUserID()
-					signedValue := signUserID(userID, macPool)
-
-					http.SetCookie(w, &http.Cookie{
-						Name:  "user_id",
-						Value: signedValue,
-						Path:  "/",
-					})
-					isValidCookie = true
-				}
 			}
 
-			// Добавляем userID и флаг валидности в контекст
-			ctx := context.WithValue(r.Context(), userIDKey, userID)
-			ctx = context.WithValue(ctx, validCookie, isValidCookie)
+			ctx := WithUserAuth(r.Context(), userID, true)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// ResolveUser нормализует токен, проверяет подпись и при необходимости выпускает новый.
+func (a *Authenticator) ResolveUser(token string) (userID string, signedToken string, needsRefresh bool) {
+	normalized := normalizeAuthorizationToken(token)
+	if normalized == "" {
+		return a.newSignedUser()
+	}
+
+	userID, valid := verifySignedUserID(normalized, a.macPool)
+	if valid {
+		return userID, normalized, false
+	}
+
+	if a.logger != nil {
+		a.logger.Warn("invalid auth token signature, creating new user ID")
+	}
+
+	return a.newSignedUser()
+}
+
+// WithUserAuth сохраняет данные пользователя в контексте.
+func WithUserAuth(ctx context.Context, userID string, isValid bool) context.Context {
+	ctx = context.WithValue(ctx, userIDKey, userID)
+	return context.WithValue(ctx, validCookie, isValid)
+}
+
+func (a *Authenticator) newSignedUser() (userID string, signedToken string, needsRefresh bool) {
+	userID = generateUserID()
+	return userID, signUserID(userID, a.macPool), true
+}
+
+func normalizeAuthorizationToken(token string) string {
+	token = strings.TrimSpace(token)
+	if len(token) >= len("Bearer ") && strings.EqualFold(token[:len("Bearer ")], "Bearer ") {
+		token = strings.TrimSpace(token[len("Bearer "):])
+	}
+	return token
 }
 
 // generateUserID генерирует случайный ID пользователя

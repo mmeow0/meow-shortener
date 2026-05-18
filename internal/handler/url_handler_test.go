@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/mmeow0/meow-shortener/internal/audit"
+	"github.com/mmeow0/meow-shortener/internal/facade"
 	"github.com/mmeow0/meow-shortener/internal/model"
 	"github.com/mmeow0/meow-shortener/internal/repository"
 	"github.com/mmeow0/meow-shortener/internal/service"
@@ -34,7 +35,7 @@ func setupHandler(t *testing.T) (*URLHandler, *chi.Mux) {
 	}
 
 	svc := service.NewURLService(repo)
-	h := NewURLHandler(svc, "http://localhost:8080", logger, nil)
+	h := NewURLHandler(facade.NewURLFacade(svc, "http://localhost:8080", nil), "", logger)
 
 	r := chi.NewRouter()
 	r.Post("/", h.CreateShortURLPlain)
@@ -485,7 +486,7 @@ func TestAudit_ShortenAndFollow_FileSink(t *testing.T) {
 	fileObs := audit.NewFileObserver(auditPath)
 	pub := audit.NewPublisher([]audit.Observer{fileObs}, zap.NewNop())
 	svc := service.NewURLService(repo)
-	h := NewURLHandler(svc, "http://localhost:8080", logger, pub)
+	h := NewURLHandler(facade.NewURLFacade(svc, "http://localhost:8080", pub), "", logger)
 
 	r := chi.NewRouter()
 	r.Post("/api/shorten", h.CreateShortURL)
@@ -528,5 +529,85 @@ func TestAudit_ShortenAndFollow_FileSink(t *testing.T) {
 	}
 	if ev.Action != audit.ActionFollow || ev.URL != original {
 		t.Fatalf("событие follow: %+v", ev)
+	}
+}
+
+func TestGetInternalStats_Success(t *testing.T) {
+	tempDir := t.TempDir()
+	repo, err := repository.NewFileURLRepository(filepath.Join(tempDir, "stats.json"))
+	if err != nil {
+		t.Fatalf("не удалось создать репозиторий: %v", err)
+	}
+
+	svc := service.NewURLService(repo)
+	h := NewURLHandler(facade.NewURLFacade(svc, "http://localhost:8080", nil), "192.168.1.0/24", zap.NewNop())
+
+	if _, err := svc.ShortenURL("https://example.com/1", "user-1"); err != nil {
+		t.Fatalf("не удалось создать первый URL: %v", err)
+	}
+	if _, err := svc.ShortenURL("https://example.com/2", "user-1"); err != nil {
+		t.Fatalf("не удалось создать второй URL: %v", err)
+	}
+	if _, err := svc.ShortenURL("https://example.com/3", "user-2"); err != nil {
+		t.Fatalf("не удалось создать третий URL: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/internal/stats", nil)
+	req.Header.Set("X-Real-IP", "192.168.1.42")
+	w := httptest.NewRecorder()
+
+	h.GetInternalStats(w, req)
+
+	res := w.Result()
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("ожидался статус 200, получен %d", res.StatusCode)
+	}
+
+	if got := res.Header.Get("Content-Type"); got != "application/json" {
+		t.Fatalf("ожидался Content-Type application/json, получен %s", got)
+	}
+
+	var response model.StatsResponse
+	if err := json.NewDecoder(res.Body).Decode(&response); err != nil {
+		t.Fatalf("ошибка декодирования JSON ответа: %v", err)
+	}
+
+	if response.URLs != 3 {
+		t.Fatalf("ожидалось 3 URL, получено %d", response.URLs)
+	}
+	if response.Users != 2 {
+		t.Fatalf("ожидалось 2 пользователя, получено %d", response.Users)
+	}
+}
+
+func TestGetInternalStats_ForbiddenWithoutTrustedSubnet(t *testing.T) {
+	svc := service.NewURLService(repository.NewInMemoryURLRepository())
+	h := NewURLHandler(facade.NewURLFacade(svc, "http://localhost:8080", nil), "", zap.NewNop())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/internal/stats", nil)
+	req.Header.Set("X-Real-IP", "192.168.1.42")
+	w := httptest.NewRecorder()
+
+	h.GetInternalStats(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("ожидался статус 403, получен %d", w.Code)
+	}
+}
+
+func TestGetInternalStats_ForbiddenForUntrustedIP(t *testing.T) {
+	svc := service.NewURLService(repository.NewInMemoryURLRepository())
+	h := NewURLHandler(facade.NewURLFacade(svc, "http://localhost:8080", nil), "192.168.1.0/24", zap.NewNop())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/internal/stats", nil)
+	req.Header.Set("X-Real-IP", "10.0.0.1")
+	w := httptest.NewRecorder()
+
+	h.GetInternalStats(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("ожидался статус 403, получен %d", w.Code)
 	}
 }

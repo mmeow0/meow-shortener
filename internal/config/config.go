@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -26,10 +27,11 @@ type Config struct {
 
 // ServerConfig описывает сетевые настройки HTTP-сервера.
 type ServerConfig struct {
-	Address     string        `json:"address"`
-	BaseURL     string        `json:"base_url"`
-	EnableHTTPS bool          `json:"enable_https"`
-	Timeout     time.Duration `json:"-"`
+	Address       string        `json:"address"`
+	BaseURL       string        `json:"base_url"`
+	EnableHTTPS   bool          `json:"enable_https"`
+	TrustedSubnet string        `json:"trusted_subnet"`
+	Timeout       time.Duration `json:"-"`
 }
 
 // StorageConfig описывает настройки хранилища.
@@ -71,6 +73,7 @@ var (
 	flagDatabaseDSN     = flag.String("d", "", "Строка подключения к базе данных")
 	flagDatabaseDSNLong = flag.String("database-dsn", "", "Строка подключения к базе данных")
 	flagEnableHTTPS     = flag.Bool("s", false, "Включить HTTPS-сервер")
+	flagTrustedSubnet   = flag.String("t", "", "Доверенная подсеть в формате CIDR для внутренней статистики")
 	flagServerTimeout   = flag.Duration("server-timeout", defaultServerTimeout, "Таймаут HTTP-сервера")
 	flagSecretKey       = flag.String("secret-key", "", "Секретный ключ для подписи кук")
 	flagConfigPath      = flag.String("c", "", "Путь к JSON-файлу конфигурации")
@@ -113,6 +116,9 @@ func NewConfig() (*Config, error) {
 	}
 	if val, ok := os.LookupEnv("BASE_URL"); ok {
 		cfg.Server.BaseURL = val
+	}
+	if val, ok := os.LookupEnv("TRUSTED_SUBNET"); ok {
+		cfg.Server.TrustedSubnet = val
 	}
 	if val, ok := os.LookupEnv("LOG_LEVEL"); ok {
 		cfg.Logging.Level = val
@@ -213,10 +219,11 @@ func loadConfigFile(path string, cfg *Config) (string, error) {
 
 	fileCfg := struct {
 		Server *struct {
-			Address     string `json:"address"`
-			BaseURL     string `json:"base_url"`
-			EnableHTTPS *bool  `json:"enable_https"`
-			Timeout     string `json:"timeout"`
+			Address       string `json:"address"`
+			BaseURL       string `json:"base_url"`
+			EnableHTTPS   *bool  `json:"enable_https"`
+			TrustedSubnet string `json:"trusted_subnet"`
+			Timeout       string `json:"timeout"`
 		} `json:"server"`
 		Storage *struct {
 			FileStoragePath string `json:"file_storage_path"`
@@ -245,6 +252,7 @@ func loadConfigFile(path string, cfg *Config) (string, error) {
 		AuditURL        string `json:"audit_url"`
 		EnablePprof     *bool  `json:"enable_pprof"`
 		EnableHTTPS     *bool  `json:"enable_https"`
+		TrustedSubnet   string `json:"trusted_subnet"`
 		ServerTimeout   string `json:"server_timeout"`
 		ServerPort      string `json:"server_port"`
 	}{}
@@ -285,6 +293,9 @@ func applyFlags(cfg *Config, setFlags map[string]bool) {
 	}
 	if flagWasSet(setFlags, "b") {
 		cfg.Server.BaseURL = *flagBaseURL
+	}
+	if flagWasSet(setFlags, "t") {
+		cfg.Server.TrustedSubnet = *flagTrustedSubnet
 	}
 	if flagWasSet(setFlags, "l") {
 		cfg.Logging.Level = *flagLogLevel
@@ -342,6 +353,12 @@ func (c *Config) validate() error {
 
 	if c.Server.Timeout <= 0 {
 		return errors.New("server timeout must be positive")
+	}
+
+	if c.Server.TrustedSubnet != "" {
+		if _, _, err := net.ParseCIDR(c.Server.TrustedSubnet); err != nil {
+			return fmt.Errorf("trusted subnet is invalid: %w", err)
+		}
 	}
 
 	return nil
