@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/mmeow0/meow-shortener/internal/audit"
+	"github.com/mmeow0/meow-shortener/internal/facade"
 	"github.com/mmeow0/meow-shortener/internal/model"
 	"github.com/mmeow0/meow-shortener/internal/repository"
 	"github.com/mmeow0/meow-shortener/internal/service"
@@ -34,7 +35,7 @@ func setupHandler(t *testing.T) (*URLHandler, *chi.Mux) {
 	}
 
 	svc := service.NewURLService(repo)
-	h := NewURLHandler(svc, "http://localhost:8080", "", logger, nil)
+	h := NewURLHandler(facade.NewURLFacade(svc, "http://localhost:8080", nil), "", logger)
 
 	r := chi.NewRouter()
 	r.Post("/", h.CreateShortURLPlain)
@@ -485,7 +486,7 @@ func TestAudit_ShortenAndFollow_FileSink(t *testing.T) {
 	fileObs := audit.NewFileObserver(auditPath)
 	pub := audit.NewPublisher([]audit.Observer{fileObs}, zap.NewNop())
 	svc := service.NewURLService(repo)
-	h := NewURLHandler(svc, "http://localhost:8080", "", logger, pub)
+	h := NewURLHandler(facade.NewURLFacade(svc, "http://localhost:8080", pub), "", logger)
 
 	r := chi.NewRouter()
 	r.Post("/api/shorten", h.CreateShortURL)
@@ -539,7 +540,7 @@ func TestGetInternalStats_Success(t *testing.T) {
 	}
 
 	svc := service.NewURLService(repo)
-	h := NewURLHandler(svc, "http://localhost:8080", "192.168.1.0/24", zap.NewNop(), nil)
+	h := NewURLHandler(facade.NewURLFacade(svc, "http://localhost:8080", nil), "192.168.1.0/24", zap.NewNop())
 
 	if _, err := svc.ShortenURL("https://example.com/1", "user-1"); err != nil {
 		t.Fatalf("не удалось создать первый URL: %v", err)
@@ -583,7 +584,7 @@ func TestGetInternalStats_Success(t *testing.T) {
 
 func TestGetInternalStats_ForbiddenWithoutTrustedSubnet(t *testing.T) {
 	svc := service.NewURLService(repository.NewInMemoryURLRepository())
-	h := NewURLHandler(svc, "http://localhost:8080", "", zap.NewNop(), nil)
+	h := NewURLHandler(facade.NewURLFacade(svc, "http://localhost:8080", nil), "", zap.NewNop())
 
 	req := httptest.NewRequest(http.MethodGet, "/api/internal/stats", nil)
 	req.Header.Set("X-Real-IP", "192.168.1.42")
@@ -598,7 +599,7 @@ func TestGetInternalStats_ForbiddenWithoutTrustedSubnet(t *testing.T) {
 
 func TestGetInternalStats_ForbiddenForUntrustedIP(t *testing.T) {
 	svc := service.NewURLService(repository.NewInMemoryURLRepository())
-	h := NewURLHandler(svc, "http://localhost:8080", "192.168.1.0/24", zap.NewNop(), nil)
+	h := NewURLHandler(facade.NewURLFacade(svc, "http://localhost:8080", nil), "192.168.1.0/24", zap.NewNop())
 
 	req := httptest.NewRequest(http.MethodGet, "/api/internal/stats", nil)
 	req.Header.Set("X-Real-IP", "10.0.0.1")

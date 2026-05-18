@@ -34,8 +34,13 @@ func (s *Server) ShortenURL(ctx context.Context, req *pb.URLShortenRequest) (*pb
 	}
 
 	userID := middleware.GetUserID(ctx, s.logger)
-	shortURL, _, err := s.facade.ShortenURL(ctx, req.GetUrl(), userID)
+	shortURL, err := s.facade.ShortenURL(ctx, req.GetUrl(), userID)
 	if err != nil {
+		var conflictErr *facade.ConflictError
+		if errors.As(err, &conflictErr) {
+			return &pb.URLShortenResponse{Result: conflictErr.Result}, nil
+		}
+
 		s.logger.Error("failed to shorten url", zap.String("url", req.GetUrl()), zap.Error(err))
 		return nil, status.Error(codes.Internal, "failed to shorten url")
 	}

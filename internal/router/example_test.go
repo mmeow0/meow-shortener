@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mmeow0/meow-shortener/internal/facade"
 	"github.com/mmeow0/meow-shortener/internal/handler"
 	"github.com/mmeow0/meow-shortener/internal/model"
 	"github.com/mmeow0/meow-shortener/internal/repository"
@@ -32,7 +33,7 @@ func newPracticumServer() (*httptest.Server, error) {
 	log := zap.NewNop()
 	repo := repository.NewInMemoryURLRepository()
 	svc := service.NewURLService(repo)
-	urlH := handler.NewURLHandler(svc, baseURL, "", log, nil)
+	urlH := handler.NewURLHandler(facade.NewURLFacade(svc, baseURL, nil), "", log)
 	pingH := handler.NewPingHandler(nil, log)
 	mux := router.NewRouter(urlH, pingH, "example-secret-for-docs", log)
 

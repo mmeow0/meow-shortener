@@ -14,27 +14,22 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/mmeow0/meow-shortener/internal/audit"
 	"github.com/mmeow0/meow-shortener/internal/facade"
 	"github.com/mmeow0/meow-shortener/internal/middleware"
 	"github.com/mmeow0/meow-shortener/internal/model"
 	"github.com/mmeow0/meow-shortener/internal/repository"
-	"github.com/mmeow0/meow-shortener/internal/service"
 	"go.uber.org/zap"
 )
 
 // URLHandler обрабатывает HTTP-запросы к сервису сокращения ссылок.
 type URLHandler struct {
-	service       *service.URLService
 	facade        *facade.URLFacade
-	baseURL       string
 	logger        *zap.Logger
 	trustedSubnet *net.IPNet
 }
 
-// NewURLHandler создаёт обработчик. baseURL — префикс публичных коротких ссылок (без завершающего «/»).
-// auditPub может быть nil, тогда события аудита не публикуются.
-func NewURLHandler(service *service.URLService, baseURL string, trustedSubnet string, logger *zap.Logger, auditPub *audit.Publisher) *URLHandler {
+// NewURLHandler создаёт HTTP-обработчик поверх общего фасада приложения.
+func NewURLHandler(appFacade *facade.URLFacade, trustedSubnet string, logger *zap.Logger) *URLHandler {
 	var subnet *net.IPNet
 	if trustedSubnet != "" {
 		_, parsedSubnet, err := net.ParseCIDR(trustedSubnet)
@@ -44,17 +39,14 @@ func NewURLHandler(service *service.URLService, baseURL string, trustedSubnet st
 	}
 
 	return &URLHandler{
-		service:       service,
-		facade:        facade.NewURLFacade(service, baseURL, auditPub),
-		baseURL:       baseURL,
+		facade:        appFacade,
 		logger:        logger,
 		trustedSubnet: subnet,
 	}
 }
 
-// shortenURL создаёт короткий URL с обработкой конфликтов
-// Возвращает: полный короткий URL, HTTP статус код (201 или 409), ошибку
-func (h *URLHandler) shortenURL(reqCtx context.Context, originalURL, userID string) (string, int, error) {
+// shortenURL создаёт короткий URL с обработкой конфликтов.
+func (h *URLHandler) shortenURL(reqCtx context.Context, originalURL, userID string) (string, error) {
 	return h.facade.ShortenURL(reqCtx, originalURL, userID)
 }
 
@@ -78,15 +70,23 @@ func (h *URLHandler) CreateShortURLPlain(res http.ResponseWriter, req *http.Requ
 	userID := middleware.GetUserID(req.Context(), h.logger)
 
 	// Создаём короткий URL с обработкой конфликтов
-	shortURL, statusCode, err := h.shortenURL(req.Context(), originalURL, userID)
+	shortURL, err := h.shortenURL(req.Context(), originalURL, userID)
 	if err != nil {
+		var conflictErr *facade.ConflictError
+		if errors.As(err, &conflictErr) {
+			res.Header().Set("Content-Type", "text/plain")
+			res.WriteHeader(http.StatusConflict)
+			_, _ = io.WriteString(res, conflictErr.Result)
+			return
+		}
+
 		log.Printf("failed to shorten url %q: %v", originalURL, err)
 		res.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
 	res.Header().Set("Content-Type", "text/plain")
-	res.WriteHeader(statusCode)
+	res.WriteHeader(http.StatusCreated)
 	_, _ = io.WriteString(res, shortURL)
 
 }
@@ -113,8 +113,16 @@ func (h *URLHandler) CreateShortURL(res http.ResponseWriter, req *http.Request) 
 	userID := middleware.GetUserID(req.Context(), h.logger)
 
 	// Создаём короткий URL с обработкой конфликтов
-	shortURL, statusCode, err := h.shortenURL(req.Context(), request.URL, userID)
+	shortURL, err := h.shortenURL(req.Context(), request.URL, userID)
 	if err != nil {
+		var conflictErr *facade.ConflictError
+		if errors.As(err, &conflictErr) {
+			res.Header().Set("Content-Type", "application/json")
+			res.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(res).Encode(model.ShortenResponse{Result: conflictErr.Result})
+			return
+		}
+
 		log.Printf("failed to shorten url %q: %v", request.URL, err)
 		res.WriteHeader(http.StatusInternalServerError)
 		return
@@ -125,7 +133,7 @@ func (h *URLHandler) CreateShortURL(res http.ResponseWriter, req *http.Request) 
 	}
 
 	res.Header().Set("Content-Type", "application/json")
-	res.WriteHeader(statusCode)
+	res.WriteHeader(http.StatusCreated)
 
 	encoder := json.NewEncoder(res)
 	if err := encoder.Encode(response); err != nil {
@@ -212,7 +220,7 @@ func (h *URLHandler) GetInternalStats(res http.ResponseWriter, req *http.Request
 		return
 	}
 
-	stats, err := h.service.GetStats()
+	stats, err := h.facade.GetStats(req.Context())
 	if err != nil {
 		h.logger.Error("failed to get internal stats", zap.Error(err))
 		res.WriteHeader(http.StatusInternalServerError)
@@ -295,7 +303,7 @@ func (h *URLHandler) DeleteUserURLs(res http.ResponseWriter, req *http.Request) 
 		}
 	}
 
-	if err := h.service.DeleteUserURLs(cleanedIDs, userID); err != nil {
+	if err := h.facade.DeleteUserURLs(req.Context(), cleanedIDs, userID); err != nil {
 		h.logger.Error("failed to queue delete task", zap.Error(err))
 		res.WriteHeader(http.StatusInternalServerError)
 		return
@@ -337,45 +345,18 @@ func (h *URLHandler) CreateShortURLBatch(res http.ResponseWriter, req *http.Requ
 	// Получаем userID из контекста
 	userID := middleware.GetUserID(req.Context(), h.logger)
 
-	// Подготавливаем данные для сервиса
-	items := make([]struct {
-		CorrelationID string
-		OriginalURL   string
-	}, len(batchRequest))
-
-	for i, item := range batchRequest {
-		items[i].CorrelationID = item.CorrelationID
-		items[i].OriginalURL = item.OriginalURL
-	}
-
-	// Создаём короткие URL
-	results, err := h.service.BatchShortenURL(items, userID)
+	results, err := h.facade.BatchShortenURL(req.Context(), batchRequest, userID)
 	if err != nil {
 		log.Printf("failed to batch shorten urls: %v", err)
 		res.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	// Формируем ответ
-	response := make([]model.BatchShortenResponse, 0, len(results))
-	for _, result := range results {
-		fullShortURL, err := url.JoinPath(h.baseURL, result.ShortURL)
-		if err != nil {
-			log.Printf("failed to join url path: %v", err)
-			continue
-		}
-
-		response = append(response, model.BatchShortenResponse{
-			CorrelationID: result.CorrelationID,
-			ShortURL:      fullShortURL,
-		})
-	}
-
 	res.Header().Set("Content-Type", "application/json")
 	res.WriteHeader(http.StatusCreated)
 
 	encoder := json.NewEncoder(res)
-	if err := encoder.Encode(response); err != nil {
+	if err := encoder.Encode(results); err != nil {
 		log.Printf("failed to encode response: %v", err)
 	}
 }

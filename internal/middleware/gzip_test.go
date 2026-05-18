@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/mmeow0/meow-shortener/internal/facade"
 	"github.com/mmeow0/meow-shortener/internal/handler"
 	"github.com/mmeow0/meow-shortener/internal/middleware"
 	"github.com/mmeow0/meow-shortener/internal/model"
@@ -35,7 +36,7 @@ func setupTestHandler(t *testing.T) http.Handler {
 	}
 
 	svc := service.NewURLService(repo)
-	h := handler.NewURLHandler(svc, "http://localhost:8080", "", logger, nil)
+	h := handler.NewURLHandler(facade.NewURLFacade(svc, "http://localhost:8080", nil), "", logger)
 
 	r := chi.NewRouter()
 	r.Use(middleware.GzipMiddleware)

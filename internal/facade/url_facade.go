@@ -12,6 +12,15 @@ import (
 	"github.com/mmeow0/meow-shortener/internal/service"
 )
 
+// ConflictError сообщает, что сущность уже существует, и возвращает канонический результат.
+type ConflictError struct {
+	Result string
+}
+
+func (e *ConflictError) Error() string {
+	return "resource already exists"
+}
+
 // URLFacade инкапсулирует общую бизнес-логику, переиспользуемую HTTP и gRPC transport-слоями.
 type URLFacade struct {
 	service *service.URLService
@@ -27,32 +36,32 @@ func NewURLFacade(service *service.URLService, baseURL string, auditPub *audit.P
 	}
 }
 
-func (f *URLFacade) ShortenURL(_ context.Context, originalURL, userID string) (string, int, error) {
+func (f *URLFacade) ShortenURL(_ context.Context, originalURL, userID string) (string, error) {
 	shortID, err := f.service.ShortenURL(originalURL, userID)
 	if err != nil {
 		if errors.Is(err, repository.ErrConflict) {
 			existingURL, findErr := f.service.FindByOriginalURL(originalURL)
 			if findErr != nil {
-				return "", 0, findErr
+				return "", findErr
 			}
 
-			shortURL, joinErr := url.JoinPath(f.baseURL, existingURL.ShortURL)
+			shortURL, joinErr := f.buildShortURL(existingURL.ShortURL)
 			if joinErr != nil {
-				return "", 0, joinErr
+				return "", joinErr
 			}
 
-			return shortURL, 409, nil
+			return "", &ConflictError{Result: shortURL}
 		}
-		return "", 0, err
+		return "", err
 	}
 
-	shortURL, err := url.JoinPath(f.baseURL, shortID)
+	shortURL, err := f.buildShortURL(shortID)
 	if err != nil {
-		return "", 0, err
+		return "", err
 	}
 
 	f.publishAudit(audit.ActionShorten, originalURL, userID)
-	return shortURL, 201, nil
+	return shortURL, nil
 }
 
 func (f *URLFacade) ExpandURL(_ context.Context, shortID, userID string) (string, error) {
@@ -73,7 +82,7 @@ func (f *URLFacade) ListUserURLs(_ context.Context, userID string) ([]model.User
 
 	response := make([]model.UserURLsResponse, 0, len(urls))
 	for _, item := range urls {
-		fullShortURL, joinErr := url.JoinPath(f.baseURL, item.ShortURL)
+		fullShortURL, joinErr := f.buildShortURL(item.ShortURL)
 		if joinErr != nil {
 			continue
 		}
@@ -85,6 +94,50 @@ func (f *URLFacade) ListUserURLs(_ context.Context, userID string) ([]model.User
 	}
 
 	return response, nil
+}
+
+func (f *URLFacade) GetStats(_ context.Context) (model.StatsResponse, error) {
+	return f.service.GetStats()
+}
+
+func (f *URLFacade) DeleteUserURLs(_ context.Context, shortIDs []string, userID string) error {
+	return f.service.DeleteUserURLs(shortIDs, userID)
+}
+
+func (f *URLFacade) BatchShortenURL(_ context.Context, items []model.BatchShortenRequest, userID string) ([]model.BatchShortenResponse, error) {
+	serviceItems := make([]struct {
+		CorrelationID string
+		OriginalURL   string
+	}, len(items))
+
+	for i, item := range items {
+		serviceItems[i].CorrelationID = item.CorrelationID
+		serviceItems[i].OriginalURL = item.OriginalURL
+	}
+
+	results, err := f.service.BatchShortenURL(serviceItems, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	response := make([]model.BatchShortenResponse, 0, len(results))
+	for _, result := range results {
+		fullShortURL, joinErr := f.buildShortURL(result.ShortURL)
+		if joinErr != nil {
+			continue
+		}
+
+		response = append(response, model.BatchShortenResponse{
+			CorrelationID: result.CorrelationID,
+			ShortURL:      fullShortURL,
+		})
+	}
+
+	return response, nil
+}
+
+func (f *URLFacade) buildShortURL(shortID string) (string, error) {
+	return url.JoinPath(f.baseURL, shortID)
 }
 
 func (f *URLFacade) publishAudit(action, originalURL, userID string) {

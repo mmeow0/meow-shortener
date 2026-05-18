@@ -112,7 +112,7 @@ func InitializeApp() (*App, error) {
 
 	authenticator := middleware.NewAuthenticator(cfg.Security.SecretKey, log)
 	urlFacade := facade.NewURLFacade(urlService, cfg.Server.BaseURL, auditPublisher)
-	urlHandler := handler.NewURLHandler(urlService, cfg.Server.BaseURL, cfg.Server.TrustedSubnet, log, auditPublisher)
+	urlHandler := handler.NewURLHandler(urlFacade, cfg.Server.TrustedSubnet, log)
 	pingHandler := handler.NewPingHandler(db, log)
 	rt := router.NewRouter(urlHandler, pingHandler, cfg.Security.SecretKey, log)
 	grpcSrv := grpc.NewServer(
